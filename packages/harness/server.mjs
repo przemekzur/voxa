@@ -25,11 +25,16 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 // Permissive localhost CORS (mirrors the brain) so the cockpit on any localhost
-// port can reach us. Also matches subdomain origins like http://tauri.localhost —
-// what Tauri v2 WebView2 windows use on Windows (the Voxa orb).
+// port can reach us. This must also match the Voxa orb's WebView origin, which
+// differs by platform under Tauri v2:
+//   • Windows (WebView2):     http://tauri.localhost   (the `tauri.` subdomain)
+//   • Linux/macOS (WebKit):   tauri://localhost        (custom `tauri:` scheme)
+// The `tauri:` scheme is the important one — miss it and every fetch from the
+// Linux/macOS orb to the harness is CORS-blocked, so the bridge loads zero tools
+// and the agent reports it can't see any connectors.
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && /^https?:\/\/([\w-]+\.)?(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(origin)) {
+  if (origin && /^(https?|tauri):\/\/([\w-]+\.)?(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");

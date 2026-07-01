@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "viewport-remote-ipc",
+  "description": "Tier A spike: let ALLOWLISTED remote pages shown in the viewport window emit DOM-read results back to the orb (the only way an external page can report through the IPC). Scoped to the viewport window + a domain allowlist — NOT all sites.",
+  "windows": ["viewport"],
+  "remote": {
+    "urls": ["https://example.com/*", "https://*.example.com/*"]
+  },
+  "permissions": [
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

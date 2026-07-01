@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Voxa Viewport</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; background: #0b0e14; color: #e8eefc;
+      font: 15px/1.55 Inter, "Segoe UI", system-ui, sans-serif; }
+    #wrap { height: 100%; box-sizing: border-box; }
+    #wrap.pad { padding: 26px; }
+    .status { height: 100%; display: grid; place-items: center; color: #9fb0d0; }
+    .error { margin: 26px; color: #ffb4b4; background: rgba(255, 84, 112, .08);
+      border: 1px solid rgba(255, 84, 112, .24); border-radius: 10px; padding: 14px 16px; }
+    iframe { border: 0; width: 100%; height: 100%; display: block; background: #0b0e14; }
+    img.full { display: block; max-width: 100%; max-height: 100vh; margin: 0 auto; }
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-thumb { background: #243355; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <div id="wrap" class="pad"><div class="status">Loading viewport…</div></div>
+  <script>
+    // The orb stages content in localStorage["voxa.viewport.<id>"] and tells this
+    // page to render it — first via "?vpid=<id>", then (so the SAME window can be
+    // reused with no flicker) by bumping localStorage["voxa.viewport.request"]
+    // {vpid, ts}, which we poll. Status is written back to ".status.<id>".
+    (function () {
+      var wrap = document.getElementById("wrap");
+      var PREFIX = "voxa.viewport.";
+      var STATUS_PREFIX = "voxa.viewport.status.";
+      var REQUEST_KEY = "voxa.viewport.request";
+
+      function writeStatus(id, status) {
+        if (!id) return;
+        try { localStorage.setItem(STATUS_PREFIX + id, JSON.stringify(Object.assign({ ts: Date.now() }, status))); } catch (_) {}
+      }
+      function showError(id, message) {
+        writeStatus(id, { ok: false, message: message });
+        wrap.className = "pad"; wrap.innerHTML = "";
+        var n = document.createElement("div"); n.className = "error"; n.textContent = message; wrap.appendChild(n);
+      }
+      // Render model HTML in a SANDBOXED iframe: its scripts run (so JS charts work)
+      // but it has a null origin — it can't reach the orb's localStorage, Tauri APIs,
+      // or this page. Bare fragments get a dark, table-friendly stylesheet wrapper.
+      function showHtml(id, html) {
+        var doc = /<html[\s>]|<!doctype/i.test(html) ? html : (
+          '<!doctype html><html><head><meta charset="utf-8"><style>' +
+          'html,body{margin:0;background:#0b0e14;color:#e8eefc;font:15px/1.55 Inter,"Segoe UI",system-ui,sans-serif;padding:18px}' +
+          'h1,h2,h3{color:#fff;letter-spacing:-.01em}a{color:#4f8ff7}' +
+          'code{font-family:"JetBrains Mono",monospace;background:rgba(70,214,224,.08);padding:1px 6px;border-radius:5px;color:#46d6e0}' +
+          'table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #243355;padding:8px 12px;text-align:left}' +
+          'th{background:#111a30;font-weight:600}tr:nth-child(even) td{background:rgba(255,255,255,.02)}' +
+          'img{max-width:100%}</style></head><body>' + html + '</body></html>'
+        );
+        wrap.className = ""; wrap.innerHTML = "";
+        var f = document.createElement("iframe");
+        f.setAttribute("sandbox", "allow-scripts allow-popups");
+        f.srcdoc = doc;
+        wrap.appendChild(f);
+        writeStatus(id, { ok: true, kind: "html" });
+      }
+      function showImage(id, url) {
+        wrap.className = "pad"; wrap.innerHTML = "";
+        var img = document.createElement("img"); img.className = "full"; img.alt = "image";
+        img.onload = function () { writeStatus(id, { ok: true, kind: "image" }); };
+        img.onerror = function () { showError(id, "Couldn't load image: " + url); };
+        img.src = url; wrap.appendChild(img);
+      }
+      function render(id) {
+        if (!id) return;
+        var text;
+        try { text = localStorage.getItem(PREFIX + id); localStorage.removeItem(PREFIX + id); } catch (_) {}
+        if (!text) return showError(id, "Viewport content was not found. Try showing it again.");
+        var payload; try { payload = JSON.parse(text); } catch (e) { return showError(id, "Unreadable viewport content."); }
+        if (payload.kind === "html") return showHtml(id, String(payload.value || ""));
+        if (payload.kind === "image") return showImage(id, String(payload.value || ""));
+        showError(id, "Unknown viewport content: " + payload.kind);
+      }
+
+      // Ignore any request key left over from a previous window; only react to bumps
+      // that happen AFTER this one loads.
+      var lastTs = 0;
+      try { lastTs = (JSON.parse(localStorage.getItem(REQUEST_KEY) || "{}").ts) || 0; } catch (_) {}
+
+      var initial = new URLSearchParams(location.search).get("vpid");
+      if (initial) render(initial);
+
+      setInterval(function () {
+        var raw; try { raw = localStorage.getItem(REQUEST_KEY); } catch (_) { return; }
+        if (!raw) return;
+        var req; try { req = JSON.parse(raw); } catch (_) { return; }
+        if (req && req.ts && req.ts !== lastTs && req.vpid) { lastTs = req.ts; render(req.vpid); }
+      }, 200);
+    })();
+  </script>
+</body>
+</html>

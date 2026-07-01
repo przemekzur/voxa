@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Voice UI</title>
+  </head>
+  <body class="idle">
+    <div class="dock">
+      <button id="orb" class="orb" aria-label="Toggle listening">
+        <canvas id="orbCanvas" class="orb-canvas"></canvas>
+      </button>
+
+      <div class="panel" data-tauri-drag-region>
+        <div class="top" data-tauri-drag-region>
+          <span id="status" class="status" data-tauri-drag-region>Idle</span>
+          <canvas id="wave" class="wave" width="60" height="20" aria-hidden="true"></canvas>
+          <span class="brand" id="brand" data-tauri-drag-region>VOICE UI</span>
+          <button id="gear" class="ib" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+          <button id="expand" class="ib" title="Expand conversation" aria-label="Expand conversation">
+            <svg class="ic-expand" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <button id="close" class="ib x" title="Close" aria-label="Close">×</button>
+        </div>
+
+        <div id="line" class="line" data-tauri-drag-region>Tap the orb to start</div>
+
+        <div id="nowplaying" class="nowplaying hidden" data-tauri-drag-region title="Now playing">
+          <span id="npIcon" class="np-ico" aria-hidden="true"></span>
+          <span id="npText" class="np-text"></span>
+        </div>
+
+        <div id="feed" class="feed hidden" aria-live="polite"></div>
+
+        <div id="settings" class="settings hidden">
+          <label class="set-row">
+            <span class="set-l">Mic</span>
+            <select id="micSel" class="sel"></select>
+          </label>
+          <label class="set-row tune">
+            <span class="set-l">Gain</span>
+            <input id="micGain" class="range" type="range" min="0.5" max="6" step="0.1" />
+            <span id="micGainVal" class="set-v">1.0×</span>
+          </label>
+          <div class="set-row tune">
+            <span class="set-l">Level</span>
+            <span class="meter"><span id="micMeter" class="meter-fill"></span></span>
+          </div>
+          <label class="set-row tune">
+            <span class="set-l">Noise sup.</span>
+            <input id="noiseSuppress" class="chk" type="checkbox" />
+            <span class="set-hint">off = picks up quiet speech</span>
+          </label>
+          <label class="set-row tune">
+            <span class="set-l">Auto gain</span>
+            <input id="autoGain" class="chk" type="checkbox" />
+            <span class="set-hint">browser AGC</span>
+          </label>
+          <label class="set-row tune">
+            <span class="set-l">Detect</span>
+            <select id="vadSel" class="sel">
+              <option value="">Default</option>
+              <option value="high">High · quiet voice</option>
+              <option value="low">Low · loud only</option>
+            </select>
+          </label>
+          <label class="set-row">
+            <span class="set-l">Key</span>
+            <button id="rekey" class="link">change API key…</button>
+          </label>
+          <label class="set-row">
+            <span class="set-l">Memory</span>
+            <button id="clearMem" class="link">clear conversation memory</button>
+          </label>
+        </div>
+
+        <input id="key" class="key hidden" type="password" placeholder="Paste Gemini API key, press Enter" autocomplete="off" spellcheck="false" />
+
+        <!-- Live input area — only shown in the expanded chat view -->
+        <div id="composer" class="composer hidden">
+          <button id="ptt" class="ptt" title="Talk (Ctrl+Space)" aria-label="Toggle voice">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+          </button>
+          <canvas id="wave2" class="wave2" width="48" height="22" aria-hidden="true"></canvas>
+          <input id="composerInput" class="composer-input" type="text" placeholder="Type a message…" autocomplete="off" spellcheck="false" />
+          <button id="send" class="send" title="Send" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+        <div id="hint" class="hint hidden">Tip: press Ctrl+Space to talk</div>
+      </div>
+    </div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

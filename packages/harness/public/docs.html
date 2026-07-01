@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Voxa v2 — Connector Harness API</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    body { margin: 0; background: #0b0e14; }
+    .topbar { display: none; }
+    .hint { font: 14px/1.5 system-ui, sans-serif; color: #aab; background: #11151f; padding: 10px 18px; border-bottom: 1px solid #222a3a; }
+    .hint b { color: #fff; }
+    .hint code { background: #1a2030; padding: 1px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="hint">
+    <b>Set your keys without curl:</b> expand <code>PUT /api/secrets/{key}</code> →
+    <b>Try it out</b> → key = <code>geminiApiKey</code> (or <code>openaiApiKey</code>) →
+    paste the value → <b>Execute</b>. The ESP voice bridge reads them from here.
+  </div>
+  <div id="swagger"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: "./openapi.json",
+      dom_id: "#swagger",
+      deepLinking: true,
+      tryItOutEnabled: true,
+      defaultModelsExpandDepth: -1,
+      presets: [SwaggerUIBundle.presets.apis],
+    });
+  </script>
+</body>
+</html>

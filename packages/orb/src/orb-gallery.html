@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Voxa orb — skin gallery</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; background: radial-gradient(120% 120% at 50% 30%, #0b121b 0%, #04060a 70%); color: #dfe6ef; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; align-items: center; }
+  h1 { font-weight: 500; font-size: 18px; letter-spacing: 0.04em; color: #8fa0b3; margin: 22px 0 0; }
+  #stage { position: relative; width: 520px; height: 520px; max-width: 94vw; }
+  canvas { width: 100%; height: 100%; display: block; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; justify-content: center; max-width: 820px; margin: 8px 16px 36px; }
+  .grp { display: flex; align-items: center; gap: 8px; }
+  label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6f7d8c; }
+  select, button { background: #121a24; color: #dfe6ef; border: 1px solid #283340; border-radius: 9px; padding: 9px 14px; font-size: 14px; cursor: pointer; transition: border-color .15s, color .15s; }
+  select:hover, button:hover { border-color: #3a4655; }
+  button.on { border-color: #2fd6bf; color: #8bffea; background: #10211f; }
+  .hint { font-size: 12px; color: #5d6b7a; margin-top: 2px; }
+</style>
+</head>
+<body>
+  <h1>Voxa orb · live skin gallery</h1>
+  <div id="stage"><canvas id="orb"></canvas></div>
+  <div class="controls">
+    <div class="grp"><label>Skin</label><select id="skin"></select></div>
+    <div class="grp"><label>Palette</label><select id="pal"></select></div>
+    <div class="grp">
+      <label>State</label>
+      <button id="sIdle" class="on">Idle</button>
+      <button id="sListen">Listening</button>
+      <button id="sSpeak">Speaking</button>
+    </div>
+  </div>
+  <div class="hint">Listening / Speaking drive the orb with a simulated voice level — same input the live mic/TTS feeds.</div>
+  <script type="module">
+    import { createOrb } from "./js/orb.js";
+    import { SKIN_ORDER, PALETTE_ORDER, getSkin, getPalette, DEFAULT_SKIN, DEFAULT_PALETTE } from "./js/skins.js";
+
+    const cv = document.getElementById("orb");
+    const orb = createOrb(cv);
+
+    const skinSel = document.getElementById("skin");
+    SKIN_ORDER.forEach((id) => { const o = document.createElement("option"); o.value = id; o.textContent = (getSkin(id) && getSkin(id).name) || id; skinSel.appendChild(o); });
+    skinSel.value = DEFAULT_SKIN;
+    skinSel.onchange = () => orb.setSkin(skinSel.value);
+
+    const palSel = document.getElementById("pal");
+    PALETTE_ORDER.forEach((id) => { const o = document.createElement("option"); o.value = id; const p = getPalette(id); o.textContent = (p && p.name) || id; palSel.appendChild(o); });
+    palSel.value = DEFAULT_PALETTE;
+    palSel.onchange = () => orb.setPalette(palSel.value);
+
+    let state = "idle";
+    function setState(s) {
+      state = s; orb.setOrbState(s);
+      ["sIdle", "sListen", "sSpeak"].forEach((b) => document.getElementById(b).classList.remove("on"));
+      document.getElementById(s === "idle" ? "sIdle" : s === "listening" ? "sListen" : "sSpeak").classList.add("on");
+    }
+    document.getElementById("sIdle").onclick = () => setState("idle");
+    document.getElementById("sListen").onclick = () => setState("listening");
+    document.getElementById("sSpeak").onclick = () => setState("speaking");
+
+    let t = 0;
+    setInterval(() => {
+      t += 0.05;
+      let lvl = 0;
+      if (state === "speaking") {
+        lvl = 0.32 + 0.30 * Math.abs(Math.sin(t * 7)) + 0.20 * Math.abs(Math.sin(t * 11.3 + 1)) + 0.10 * Math.sin(t * 3.1);
+        lvl = Math.max(0.08, Math.min(1, lvl));
+      } else if (state === "listening") {
+        lvl = 0.10 + 0.10 * Math.abs(Math.sin(t * 4.0)) + 0.05 * Math.abs(Math.sin(t * 9));
+      }
+      orb.setAudioLevel(lvl);
+    }, 50);
+
+    orb.setSkin(DEFAULT_SKIN);
+    orb.setPalette(DEFAULT_PALETTE);
+    setState("idle");
+  </script>
+</body>
+</html>

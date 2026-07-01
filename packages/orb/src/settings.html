@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voxa Settings</title>
+  <style>
+    :root { --bg:#0b0e17; --panel:#141a28; --line:#243049; --txt:#e7ecf6; --mut:#8b97b0; --accent:#8b7cff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.45 Inter, system-ui, sans-serif; background:var(--bg); color:var(--txt); padding:20px; }
+    h1 { font-size:16px; margin:0 0 4px; }
+    p.sub { margin:0 0 18px; color:var(--mut); font-size:12px; }
+    label { display:block; margin:14px 0 4px; font-size:12px; color:var(--mut); }
+    input, select, textarea {
+      width:100%; background:var(--panel); border:1px solid var(--line); color:var(--txt);
+      border-radius:8px; padding:8px 10px; font:inherit; outline:none;
+    }
+    input:focus, select:focus, textarea:focus { border-color:var(--accent); }
+    textarea { resize:vertical; min-height:64px; }
+    .row { display:flex; gap:10px; }
+    .row > div { flex:1; }
+    .hint { font-size:11px; color:var(--mut); margin-top:3px; }
+    .bar { position:sticky; bottom:0; background:linear-gradient(transparent, var(--bg) 30%);
+      padding-top:18px; margin-top:22px; display:flex; gap:10px; align-items:center; }
+    button { background:var(--accent); color:#fff; border:none; border-radius:8px; padding:9px 16px;
+      font:inherit; font-weight:600; cursor:pointer; }
+    button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); }
+    #status { font-size:12px; color:var(--mut); }
+    fieldset { border:1px solid var(--line); border-radius:10px; padding:4px 14px 14px; margin:18px 0 0; }
+    legend { padding:0 6px; color:var(--accent); font-size:12px; font-weight:600; }
+  </style>
+</head>
+<body>
+  <h1>Voxa Settings</h1>
+  <p class="sub">Saved to <code>voxa-config.json</code>. Changes apply on the orb's next session (tap the orb).</p>
+
+  <fieldset>
+    <legend>Voice</legend>
+    <label for="provider">Provider</label>
+    <select id="provider">
+      <option value="gemini">Gemini Live</option>
+      <option value="openai">OpenAI Realtime</option>
+      <option value="daemon">Local daemon (bring your own)</option>
+    </select>
+    <div class="hint">Model/voice below apply to Gemini. OpenAI &amp; daemon use their own fields lower down.</div>
+    <div class="row">
+      <div>
+        <label for="model">Model</label>
+        <input id="model" list="models" placeholder="gemini-3.1-flash-live-preview" />
+        <datalist id="models">
+          <option value="gemini-3.1-flash-live-preview"></option>
+          <option value="gemini-2.5-flash-native-audio-preview"></option>
+        </datalist>
+      </div>
+      <div>
+        <label for="voiceName">Voice</label>
+        <select id="voiceName">
+          <option>Achernar</option><option>Algenib</option><option>Algieba</option>
+          <option>Aoede</option><option>Autonoe</option><option>Callirrhoe</option>
+          <option>Charon</option><option>Despina</option><option>Enceladus</option>
+          <option>Erinome</option><option>Fenrir</option><option>Kore</option>
+          <option>Laomedeia</option><option>Leda</option><option>Orus</option>
+          <option>Puck</option><option>Sadaltager</option><option>Sulafat</option>
+          <option>Zephyr</option><option>Zubenelgenubi</option>
+        </select>
+      </div>
+    </div>
+    <label for="key">Gemini API key</label>
+    <input id="key" type="password" placeholder="AIza… (stored locally on this machine)" />
+    <div class="hint">Stored in the app's local storage, never in the config file.</div>
+
+    <label for="openaiKey">OpenAI API key <span style="opacity:.6">— for the OpenAI provider</span></label>
+    <input id="openaiKey" type="password" placeholder="sk-… (stored locally)" />
+    <div class="row">
+      <div>
+        <label for="openaiVoice">OpenAI voice</label>
+        <input id="openaiVoice" list="oaivoices" placeholder="marin" />
+        <datalist id="oaivoices"><option value="marin"></option><option value="alloy"></option><option value="echo"></option><option value="shimmer"></option><option value="cedar"></option></datalist>
+      </div>
+      <div>
+        <label for="daemonUrl">Local daemon URL</label>
+        <input id="daemonUrl" placeholder="ws://127.0.0.1:7142/voxa" />
+      </div>
+    </div>
+    <div class="hint">Local daemon is push-to-talk — turn on Push-to-talk and run your own daemon at that URL.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Persona</legend>
+    <label for="soul">Persona</label>
+    <select id="soul"></select>
+    <div class="hint" id="soulTag"></div>
+    <label for="personaName">Name (orb badge)</label>
+    <input id="personaName" placeholder="Voxa" />
+    <label for="instruction">Instruction (system prompt)</label>
+    <textarea id="instruction" rows="7" placeholder="You are Voxa, a concise, dry-witted desktop assistant…"></textarea>
+    <div class="hint">Edit any preset — your changes are saved against that persona. Picking a persona also sets its recommended voice above.</div>
+    <button id="resetSoul" class="ghost" type="button" style="margin-top:8px;padding:5px 10px;font-size:12px;">Reset to preset default</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Brain (your notes)</legend>
+    <label for="brainDir">Notes folder</label>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <input id="brainDir" readonly placeholder="…\Voxa\brain" style="flex:1" />
+      <button id="openBrain" type="button" class="ghost" style="white-space:nowrap">Open folder</button>
+    </div>
+    <div class="hint">Voxa's local brain is a folder of Markdown notes. "Remember…" writes here; "search my notes…" reads here. Point an Obsidian vault at this path (or change the memory connector's folder at the harness UI) to use your own.</div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Tools</legend>
+    <label for="source">Connector harness URL</label>
+    <input id="source" placeholder="http://localhost:3010" />
+    <div class="hint">Where the memory brain + connectors live.</div>
+  </fieldset>
+
+  <div class="bar">
+    <button id="save">Save</button>
+    <button id="close" class="ghost" type="button">Close</button>
+    <span id="status"></span>
+  </div>
+
+  <script type="module" src="./settings.js"></script>
+</body>
+</html>

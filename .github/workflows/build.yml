@@ -1,0 +1,57 @@
+name: build
+
+# Proves Voxa builds on all three desktop platforms (the multi-platform guarantee).
+# The orb is the platform-sensitive part (Tauri → WebView2 / WKWebView / WebKitGTK);
+# the harness is plain Node. --no-bundle compiles the app without producing/signing
+# installers, which is enough to validate the build on each OS.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  orb:
+    name: orb (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: packages/orb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux WebKitGTK deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+      - run: npm run tauri build -- --no-bundle
+
+  harness:
+    name: harness (node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/harness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      # Syntax-check every module the harness loads.
+      - run: |
+          node --check server.mjs
+          for f in lib/*.mjs connectors/*/index.mjs; do node --check "$f"; done

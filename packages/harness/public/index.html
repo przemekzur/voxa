@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Voxa · Connectors</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo"></span>
+      <div>
+        <h1>VOXA</h1>
+        <span class="sub">/ CONNECTOR HARNESS</span>
+      </div>
+    </div>
+    <div class="top-right">
+      <span class="bridge-chip" id="bridgeChip" title="Tools currently exposed to the voice cockpit">
+        <span class="dot" id="bridgeDot">●</span> <span id="bridgeTx">bridge …</span>
+      </span>
+      <a class="btn ghost sm" href="./docs.html" title="OpenAPI / REST reference">API docs ↗</a>
+      <button class="btn ghost sm" id="reloadBtn" title="Reload connector modules from disk">⟳ Reload</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- Lead + foldable explainer -->
+    <section class="lead">
+      <h2>Service connectors</h2>
+      <p>
+        Each connector is a small plug-in that turns a service into <strong>voice tools</strong> for the Voxa cockpit.
+        Enable one, configure it, and its actions appear on the bridge at <code id="selfUrl">this server</code>.
+      </p>
+      <details class="explainer">
+        <summary>How connectors work <span class="chev">▾</span></summary>
+        <div class="explainer-b">
+          <ol>
+            <li><strong>Discover</strong> — every folder in <code>connectors/&lt;id&gt;/index.mjs</code> is auto-loaded as a connector.</li>
+            <li><strong>Enable &amp; configure</strong> — flip a connector on and fill its fields (API keys, hosts). Secrets stay server-side.</li>
+            <li><strong>Test</strong> — run its connectivity check and try each action right here before going live.</li>
+            <li><strong>Speak</strong> — enabled actions are merged into <code>GET /api/voice/tools</code>; the cockpit calls them by voice.</li>
+          </ol>
+          <p class="muted">
+            Want a new one? A connector is a single dependency-free ES module — see
+            <code>BUILDING-A-CONNECTOR.md</code>, or ask Claude to run the <code>connector-builder</code> skill to scaffold it for you.
+          </p>
+        </div>
+      </details>
+    </section>
+
+    <!-- Stat strip + filter -->
+    <section class="toolbar">
+      <div class="stats" id="stats"></div>
+      <div class="filters">
+        <input id="search" class="search" type="search" placeholder="Filter connectors…" autocomplete="off" />
+        <div class="seg" id="statusFilter" role="tablist">
+          <button class="seg-b is-on" data-f="all">All</button>
+          <button class="seg-b" data-f="enabled">Enabled</button>
+          <button class="seg-b" data-f="disabled">Off</button>
+          <button class="seg-b" data-f="needs-config">Needs config</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid" id="grid"></section>
+    <div class="empty" id="empty" hidden>No connectors match.</div>
+  </main>
+
+  <!-- config modal -->
+  <div class="modal" id="modal" hidden>
+    <div class="sheet">
+      <div class="sheet-h">
+        <span id="mTitle">Configure</span>
+        <button class="x" id="mClose" aria-label="Close">✕</button>
+      </div>
+      <div class="sheet-b" id="mBody"></div>
+      <div class="sheet-f">
+        <span class="msg" id="mMsg"></span>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="mTest">Test</button>
+        <button class="btn primary" id="mSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Voxa v2 — Connector Harness API",
+    "version": "0.1.0",
+    "description": "Manage connectors, app secrets (e.g. the Gemini / OpenAI keys used by the ESP voice bridge), and the merged voice-tool surface. Use **Try it out** below instead of curl.\n\nNote: unmasked secret reads (`GET /api/secrets/{key}`) are **loopback-only** — they work from this page (localhost) and from the local bridge, never over the LAN."
+  },
+  "servers": [{ "url": "/" }],
+  "tags": [
+    { "name": "secrets", "description": "Server-side app secrets (Gemini/OpenAI keys, …)" },
+    { "name": "connectors", "description": "Service integrations (Grenton, …)" },
+    { "name": "voice", "description": "Merged voice-tool surface" },
+    { "name": "system", "description": "Health / reload" }
+  ],
+  "paths": {
+    "/api/secrets": {
+      "get": {
+        "tags": ["secrets"],
+        "summary": "List which secret keys are set (values never returned)",
+        "responses": {
+          "200": {
+            "description": "Key list",
+            "content": { "application/json": { "example": { "keys": [ { "key": "geminiApiKey", "set": true }, { "key": "openaiApiKey", "set": false } ] } } }
+          }
+        }
+      }
+    },
+    "/api/secrets/{key}": {
+      "parameters": [
+        { "name": "key", "in": "path", "required": true, "schema": { "type": "string" }, "example": "geminiApiKey",
+          "description": "Secret name. Conventionally geminiApiKey or openaiApiKey." }
+      ],
+      "get": {
+        "tags": ["secrets"],
+        "summary": "Read a secret UNMASKED (loopback only)",
+        "responses": {
+          "200": { "description": "The secret value", "content": { "application/json": { "example": { "key": "geminiApiKey", "value": "AIza…" } } } },
+          "403": { "description": "Not loopback" },
+          "404": { "description": "Not set" }
+        }
+      },
+      "put": {
+        "tags": ["secrets"],
+        "summary": "Set a secret (loopback only)",
+        "description": "Store/replace a secret value. This is how you save the Gemini or OpenAI key for the ESP voice bridge.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": {
+            "schema": { "type": "object", "required": ["value"], "properties": { "value": { "type": "string", "description": "The secret value" } } },
+            "example": { "value": "paste-your-key-here" }
+          } }
+        },
+        "responses": {
+          "200": { "description": "Saved", "content": { "application/json": { "example": { "ok": true, "key": "geminiApiKey" } } } },
+          "400": { "description": "Missing value" },
+          "403": { "description": "Not loopback" }
+        }
+      }
+    },
+    "/api/connectors": {
+      "get": {
+        "tags": ["connectors"],
+        "summary": "List connectors with config schema + saved (masked) state",
+        "responses": { "200": { "description": "Connectors" } }
+      }
+    },
+    "/api/connectors/{id}": {
+      "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "example": "grenton" } ],
+      "put": {
+        "tags": ["connectors"],
+        "summary": "Save a connector's config and/or enabled flag",
+        "requestBody": { "required": true, "content": { "application/json": {
+          "schema": { "type": "object", "properties": { "enabled": { "type": "boolean" }, "config": { "type": "object", "additionalProperties": true } } },
+          "example": { "enabled": true, "config": {} }
+        } } },
+        "responses": { "200": { "description": "Saved (config masked back)" }, "404": { "description": "Unknown connector" } }
+      }
+    },
+    "/api/connectors/{id}/test": {
+      "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "example": "grenton" } ],
+      "post": { "tags": ["connectors"], "summary": "Run a connector's connectivity test", "responses": { "200": { "description": "Result" } } }
+    },
+    "/api/connectors/{id}/actions/{name}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "example": "example-echo" },
+        { "name": "name", "in": "path", "required": true, "schema": { "type": "string" }, "example": "echo_say" }
+      ],
+      "post": {
+        "tags": ["connectors"],
+        "summary": "Run a single connector action (tool) directly",
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "args": { "type": "object", "additionalProperties": true } } }, "example": { "args": { "text": "hello" } } } } },
+        "responses": { "200": { "description": "Tool result or error" } }
+      }
+    },
+    "/api/reload": {
+      "post": { "tags": ["system"], "summary": "Hot-reload connector modules from disk", "responses": { "200": { "description": "Reloaded" } } }
+    },
+    "/api/voice/tools": {
+      "get": { "tags": ["voice"], "summary": "List enabled connector tools (the model's tool surface)", "responses": { "200": { "description": "Tools" } } }
+    },
+    "/api/voice/tools/call": {
+      "post": {
+        "tags": ["voice"],
+        "summary": "Call a connector tool by name",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "args": { "type": "object", "additionalProperties": true } } }, "example": { "name": "echo_say", "args": { "text": "hi" } } } } },
+        "responses": { "200": { "description": "Result or error" }, "404": { "description": "No connector owns that tool" } }
+      }
+    },
+    "/health": {
+      "get": { "tags": ["system"], "summary": "Health check", "responses": { "200": { "description": "ok" } } }
+    }
+  }
+}

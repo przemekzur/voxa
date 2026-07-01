@@ -1,0 +1,13 @@
+# dependencies / build output / runtime state — never published
+node_modules/
+**/node_modules/
+**/target/
+**/dist/
+**/build/
+**/gen/
+# harness runtime state holds connector configs + secrets
+**/data/
+**/state*.json
+**/.env*
+**/*.local.*
+.DS_Store

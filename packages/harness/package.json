@@ -1,7 +1,7 @@
 {
   "name": "voxa-harness",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Voxa connector harness — hosts connectors (voice tools), the forge build-agent, and the local Markdown brain, speaking the voice-tool contract (GET/POST /api/voice/tools).",
   "engines": { "node": ">=18" },

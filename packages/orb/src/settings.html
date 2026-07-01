@@ -102,7 +102,7 @@
     <legend>Brain (your notes)</legend>
     <label for="brainDir">Notes folder</label>
     <div style="display:flex; gap:10px; align-items:center;">
-      <input id="brainDir" readonly placeholder="…\Voxa\brain" style="flex:1" />
+      <input id="brainDir" readonly spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="…\Voxa\brain" style="flex:1" />
       <button id="openBrain" type="button" class="ghost" style="white-space:nowrap">Open folder</button>
     </div>
     <div class="hint">Voxa's local brain is a folder of Markdown notes. "Remember…" writes here; "search my notes…" reads here. Point an Obsidian vault at this path (or change the memory connector's folder at the harness UI) to use your own.</div>
@@ -111,7 +111,7 @@
   <fieldset>
     <legend>Tools</legend>
     <label for="source">Connector harness URL</label>
-    <input id="source" placeholder="http://localhost:3010" />
+    <input id="source" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="http://localhost:3010" />
     <div class="hint">Where the memory brain + connectors live.</div>
   </fieldset>
 

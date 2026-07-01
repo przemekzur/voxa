@@ -58,6 +58,32 @@ fn open_brain_folder(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// Linux/WebKitGTK: getUserMedia() is gated off twice over, and nothing wires
+// either gate open by default — so `navigator.mediaDevices` is unusable,
+// `enumerateDevices()` comes back empty ("no devices"), the mic never starts,
+// and the realtime session dies with a misleading "session closed". We reach
+// through Tauri's `with_webview` to the underlying `webkit2gtk::WebView` and:
+//   1. flip the `enable-media-stream` setting on (default is OFF), and
+//   2. answer the `permission-request` signal, granting mic/camera requests
+//      (the frontend is our own bundled, loopback-only UI).
+// No-op on macOS/Windows, whose WebViews expose the mic without this.
+#[cfg(target_os = "linux")]
+fn enable_linux_media(app: &tauri::App) {
+    use tauri::Manager;
+    let Some(window) = app.get_webview_window("main") else { return };
+    let _ = window.with_webview(|webview| {
+        use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+        let wv = webview.inner();
+        if let Some(settings) = WebViewExt::settings(&wv) {
+            settings.set_enable_media_stream(true);
+        }
+        wv.connect_permission_request(|_wv, req| {
+            req.allow();
+            true
+        });
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -74,6 +100,11 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        .setup(|_app| {
+            #[cfg(target_os = "linux")]
+            enable_linux_media(_app);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![greet, read_local_config, write_local_config, viewport_eval, brain_dir, open_brain_folder])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

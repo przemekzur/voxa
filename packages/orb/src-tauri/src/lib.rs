@@ -49,12 +49,22 @@ fn brain_path() -> std::path::PathBuf {
 fn brain_dir() -> String { brain_path().to_string_lossy().to_string() }
 
 #[tauri::command]
-fn open_brain_folder(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
+fn open_brain_folder() -> Result<(), String> {
+    // Reveal the brain folder in the OS file manager. tauri-plugin-opener's
+    // open_path is unreliable for *directories* on Windows, so shell out to the
+    // native file manager directly (explorer / open / xdg-open).
     let dir = brain_path();
     let _ = std::fs::create_dir_all(&dir);
-    app.opener()
-        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let program = "xdg-open";
+    std::process::Command::new(program)
+        .arg(&dir)
+        .spawn()
+        .map(|_| ())
         .map_err(|e| e.to_string())
 }
 

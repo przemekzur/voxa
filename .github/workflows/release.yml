@@ -68,7 +68,9 @@ jobs:
             - **macOS:** the universal `.dmg`
             - **Linux:** `.AppImage` or `.deb`
 
-            > Voxa also needs the connector harness running for tools + the local notes brain.
+            > Voxa launches its bundled connector harness (tools + the local notes
+            > brain) automatically — it just needs Node 18+ on your PATH. All
+            > connectors ship enabled; manage them from the orb's gear → 🔌 Connectors.
             > See the [README quick-start](https://github.com/przemekzur/voxa#quick-start).
           releaseDraft: false
           prerelease: false

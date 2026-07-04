@@ -68,6 +68,120 @@ fn open_brain_folder() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ── Voxa: harness supervisor ─────────────────────────────────────────────────
+// One-file launch: starting the orb also boots the local connector harness
+// (tools + memory brain) and shuts it down on exit. If a harness is already
+// listening (e.g. started manually in a terminal), the orb just uses it.
+static HARNESS_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+// Which loopback port to boot the harness on: env override, else the harness
+// URL configured in Settings (so we start the same server the orb will call),
+// else the default. None = the configured tool source is remote — don't spawn.
+fn harness_spawn_port() -> Option<u16> {
+    if let Ok(v) = std::env::var("VOXA_HARNESS_PORT") {
+        return v.parse().ok();
+    }
+    let cfg: serde_json::Value = match std::fs::read_to_string(voxa_config_path()) {
+        Err(_) => return Some(3010), // no config yet (first run) — use the default
+        Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
+    };
+    let url = cfg
+        .get("sources")
+        .and_then(|s| s.get(0))
+        .and_then(|s| s.get("url"))
+        .and_then(|u| u.as_str());
+    match url {
+        None => Some(3010),
+        Some(u) if u.contains("localhost") || u.contains("127.0.0.1") => {
+            let digits: String = u
+                .rsplit(':')
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            Some(digits.parse().unwrap_or(3010))
+        }
+        Some(_) => None, // remote tool source — the user runs their own
+    }
+}
+
+fn harness_running(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(400),
+    )
+    .is_ok()
+}
+
+// Locate the harness: a repo checkout first (dev — live code; needs npm install
+// there), then the copy bundled into the app's resources (packaged installs).
+fn find_harness(app: &tauri::AppHandle) -> Option<(std::path::PathBuf, bool)> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            roots.push(d.to_path_buf());
+        }
+    }
+    for root in &roots {
+        for anc in root.ancestors() {
+            let dir = anc.join("packages").join("harness");
+            if dir.join("server.mjs").exists() && dir.join("node_modules").exists() {
+                return Some((dir, false));
+            }
+        }
+    }
+    use tauri::Manager;
+    if let Ok(res) = app.path().resource_dir() {
+        let dir = res.join("harness");
+        if dir.join("server.mjs").exists() {
+            return Some((dir, true));
+        }
+    }
+    None
+}
+
+fn start_harness(app: &tauri::AppHandle) {
+    let Some(port) = harness_spawn_port() else { return };
+    if harness_running(port) {
+        return; // already up (manual terminal, another instance)
+    }
+    let Some((dir, packaged)) = find_harness(app) else {
+        eprintln!("[voxa] no connector harness found to auto-start (see packages/harness)");
+        return;
+    };
+    let mut cmd = std::process::Command::new("node");
+    cmd.arg("server.mjs").current_dir(&dir).env("PORT", port.to_string());
+    if packaged {
+        // App resources are read-only — keep connector state in the user dir.
+        if let Some(base) = voxa_config_path().parent() {
+            cmd.env("VOXA_DATA_DIR", base.join("harness"));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — no console flash
+    }
+    match cmd.spawn() {
+        Ok(child) => {
+            eprintln!("[voxa] connector harness starting on http://127.0.0.1:{} (pid {})", port, child.id());
+            *HARNESS_CHILD.lock().unwrap() = Some(child);
+        }
+        Err(e) => eprintln!("[voxa] couldn't start the harness (is Node 18+ installed?): {}", e),
+    }
+}
+
+fn stop_harness() {
+    if let Some(mut child) = HARNESS_CHILD.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 // Linux/WebKitGTK: getUserMedia() is gated off twice over, and nothing wires
 // either gate open by default — so `navigator.mediaDevices` is unusable,
 // `enumerateDevices()` comes back empty ("no devices"), the mic never starts,
@@ -110,12 +224,20 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .setup(|app| {
+            // Linux: wire WebKitGTK's media-stream gates open (mic). No-op elsewhere.
             #[cfg(target_os = "linux")]
-            enable_linux_media(_app);
+            enable_linux_media(app);
+            // Voxa one-file launch: the orb supervises the local connector harness.
+            start_harness(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![greet, read_local_config, write_local_config, viewport_eval, brain_dir, open_brain_folder])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                stop_harness();
+            }
+        });
 }

@@ -111,8 +111,11 @@
   <fieldset>
     <legend>Tools</legend>
     <label for="source">Connector harness URL</label>
-    <input id="source" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="http://localhost:3010" />
-    <div class="hint">Where the memory brain + connectors live.</div>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <input id="source" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="http://localhost:3010" style="flex:1" />
+      <button id="openConnectors" type="button" class="ghost" style="white-space:nowrap">Connectors ↗</button>
+    </div>
+    <div class="hint">Where the memory brain + connectors live — the orb starts it automatically. Enable, configure, and test connectors in the manager.</div>
   </fieldset>
 
   <div class="bar">

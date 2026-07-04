@@ -50,7 +50,7 @@ app.use((req, res, next) => {
 app.get("/api/connectors", async (_req, res) => {
   const all = await getAllState();
   const list = allConnectors().map((m) => {
-    const st = all[m.id] || { enabled: !!m.defaultEnabled, config: {} };
+    const st = all[m.id] || { enabled: defaultOn(m), config: {} };
     const needsConfig = m.config.some((f) => f.required && !st.config?.[f.key] && f.default === undefined);
     return {
       id: m.id,
@@ -135,7 +135,8 @@ function isLoopback(req) {
   return a === "127.0.0.1" || a === "::1";
 }
 
-// List which secret keys are set (values never returned here).
+// List which secret keys are set (values never returned here) — loopback only,
+// so the LAN can't even enumerate which secrets exist.
 app.get("/api/secrets", async (req, res) => {
   if (!isLoopback(req)) return res.status(403).json({ error: "loopback only" });
   const cfg = (await getState(SECRETS_ID)).config || {};
@@ -170,13 +171,18 @@ app.delete("/api/secrets/:key", async (req, res) => {
 // ── Voice-tool surface (same contract as the brain) ──────────────────────────
 
 // Build the list of enabled connector tools.
+// Voxa: default-enabled unless the connector opts out or can't work unconfigured.
+const defaultOn = (m) =>
+  m.defaultEnabled !== false &&
+  !m.config.some((f) => f.required && f.default === undefined);
+
 async function connectorTools() {
   const all = await getAllState();
   const tools = [];
   const owners = new Map(); // toolName -> connectorId
   for (const m of allConnectors()) {
     const st = all[m.id];
-    if (!(st ? st.enabled : m.defaultEnabled)) continue;
+    if (!(st ? st.enabled : defaultOn(m))) continue;
     for (const a of m.actions) {
       tools.push({ name: a.name, description: a.description || "", parameters: a.parameters || { type: "object", properties: {} } });
       owners.set(a.name, m.id);
@@ -227,6 +233,9 @@ app.use(express.static(join(__dirname, "public")));
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "connector-harness" }));
 
 await loadConnectors();
+// Security: bind loopback-only. Every consumer (orb, realtime-voice, the local
+// ESP bridge) reaches this over http://localhost — nothing on the LAN should be
+// able to invoke connectors or read secrets.
 app.listen(PORT, "127.0.0.1", () => {
   console.error(`[harness] Connector harness on http://localhost:${PORT}`);
   console.error(`[harness] Serves connector tools only (brain stays separate at ${BRAIN_URL}).`);

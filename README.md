@@ -54,16 +54,12 @@ The orb reads a local `voxa-config.json` and connects to the harness over a tiny
 **Prerequisites:** [Rust](https://rustup.rs) (stable), Node 18+. On Linux also: `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`.
 
 ```bash
-# 1) Start the connector harness (the memory brain ships enabled)
-cd packages/harness
-npm install
-npm start                 # http://localhost:3010
-
-# 2) Build & run the orb
-cd ../orb
+cd packages/orb
 npm install
 npm run tauri dev         # or: npm run tauri build
 ```
+
+That's it — the orb **auto-starts the connector harness** (tools + memory brain, all connectors enabled out of the box) and stops it when you quit. Prefer to run the harness yourself? `cd packages/harness && npm install && npm start` — the orb detects it and won't start a second one.
 
 Tap the orb, paste a [Gemini API key](https://aistudio.google.com/apikey) when prompted (stored locally), allow the mic, and talk. Try: *"remember that the standup moved to 10am"*, then later *"what time is standup?"*
 
@@ -71,7 +67,7 @@ Tap the orb, paste a [Gemini API key](https://aistudio.google.com/apikey) when p
 
 ## Configure it
 
-Open the orb's **gear → ⚙ Settings…** to change the **provider** (Gemini / OpenAI / local daemon), **voice model & voice**, **API keys**, **persona**, the **brain folder** (with an *Open folder* button), and the harness URL. Settings are written to `voxa-config.json` in your app-data dir. Manage/enable connectors (and set their API keys) at **http://localhost:3010**.
+Everything is one tap from the orb's **gear**: skins, palettes, and layouts live right in the panel; **⚙ Settings…** opens voice **provider** (Gemini / OpenAI / local daemon), **voice model & voice**, **API keys**, **persona**, and the **brain folder** (with an *Open folder* button); **🔌 Connectors…** opens the connector manager as an app window (also at **http://localhost:3010**), where every connector ships **enabled by default** and *Enable all / Disable all* flips the whole set at once. Settings are written to `voxa-config.json` in your app-data dir.
 
 <p align="center">
   <img src="docs/assets/settings.png" alt="Voxa Settings — provider, voice, persona, brain folder, and harness" width="440" />

@@ -629,6 +629,27 @@ async function openSettingsWindow() {
     });
   } catch (e) { setLine("Couldn't open settings: " + (e?.message || e)); }
 }
+// Voxa: the connector manager (harness UI) as an app window, so connectors are
+// one tap from the orb instead of "type localhost:3010 into a browser".
+function harnessUrl() {
+  return (((SETTINGS.sources || [])[0] || {}).url || "http://localhost:3010").replace(/\/+$/, "");
+}
+async function openConnectorsWindow() {
+  const url = harnessUrl();
+  try { await fetch(url + "/health", { cache: "no-store" }); }
+  catch { setLine("Connector harness isn't running at " + url); return; }
+  const WebviewWindow = getWebviewWindow();
+  if (!WebviewWindow) { try { window.open(url, "_blank"); } catch {} return; }
+  try {
+    const existing = await WebviewWindow.getByLabel("connectors");
+    if (existing) { try { await existing.setFocus(); } catch {} return; }
+    new WebviewWindow("connectors", {
+      url, title: "Voxa Connectors",
+      width: 1080, height: 760, resizable: true, decorations: true,
+      transparent: false, alwaysOnTop: false, focus: true, center: true,
+    });
+  } catch (e) { setLine("Couldn't open connectors: " + (e?.message || e)); }
+}
 (function addSettingsButton() {
   if (!els.rekey || !els.rekey.parentNode || document.getElementById("openSettings")) return;
   const b = document.createElement("button");
@@ -636,6 +657,11 @@ async function openSettingsWindow() {
   b.className = els.rekey.className || "";
   b.addEventListener("click", () => { closeSettings(); openSettingsWindow(); });
   els.rekey.parentNode.insertBefore(b, els.rekey.nextSibling);
+  const c = document.createElement("button");
+  c.id = "openConnectors"; c.type = "button"; c.textContent = "🔌 Connectors…";
+  c.className = els.rekey.className || "";
+  c.addEventListener("click", () => { closeSettings(); openConnectorsWindow(); });
+  els.rekey.parentNode.insertBefore(c, b.nextSibling);
 })();
 els.clearMem.addEventListener("click", () => {
   clearMemory();

@@ -135,8 +135,7 @@ function isLoopback(req) {
   return a === "127.0.0.1" || a === "::1";
 }
 
-// List which secret keys are set (values never returned here) — loopback only,
-// so the LAN can't even enumerate which secrets exist.
+// List which secret keys are set (values never returned here).
 app.get("/api/secrets", async (req, res) => {
   if (!isLoopback(req)) return res.status(403).json({ error: "loopback only" });
   const cfg = (await getState(SECRETS_ID)).config || {};
@@ -233,9 +232,6 @@ app.use(express.static(join(__dirname, "public")));
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "connector-harness" }));
 
 await loadConnectors();
-// Security: bind loopback-only. Every consumer (orb, realtime-voice, the local
-// ESP bridge) reaches this over http://localhost — nothing on the LAN should be
-// able to invoke connectors or read secrets.
 app.listen(PORT, "127.0.0.1", () => {
   console.error(`[harness] Connector harness on http://localhost:${PORT}`);
   console.error(`[harness] Serves connector tools only (brain stays separate at ${BRAIN_URL}).`);

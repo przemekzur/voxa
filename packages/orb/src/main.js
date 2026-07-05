@@ -108,15 +108,24 @@ function chooseSkin(id) { const s = getSkin(id); appearance.skin = s.id; applyAp
 function choosePalette(id) { const p = getPalette(id); appearance.palette = p.id; applyAppearance(); return p; }
 // ── Layout (window arrangement; switchable at runtime) ──────────────────────
 async function growToSettings() {
-  // Settings is taller than the collapsed window. Measuring is unreliable here (the
-  // panel is align-self:stretch so its box is clamped to the tiny window), so grow
-  // to a fixed per-layout settings size that comfortably fits all controls.
-  // `settings-open` top-aligns the panel so the controls read from the top.
+  // Auto-fit: size the window to the settings panel's ACTUAL content (chip rows
+  // wrap; rows get added over time) instead of a fixed height — no scrollbar.
+  // `settings-open` top-aligns the panel; the shortfall is the settings box's
+  // scrollHeight minus what it was given. Cap to the current monitor.
   els.body.classList.add("settings-open");
-  settingsGrew = true;
-  const lay = curLayout();
-  const w = Math.max(460, lay.collapsed.w);
-  await setWindowSize(w, lay.settingsH || 480, false);
+  const need = els.settings.scrollHeight - els.settings.clientHeight;
+  let h = Math.ceil(window.innerHeight + Math.max(0, need) + 6);
+  try {
+    const mon = await TAURI.window.currentMonitor();
+    if (mon) h = Math.min(h, Math.floor(mon.size.height / (mon.scaleFactor || 1)) - 90);
+  } catch { /* no monitor info — keep the measured height */ }
+  if (expanded) {
+    // Expanded is user-resizable: only GROW to fit, never shrink their window.
+    if (need > 0) { settingsGrew = true; await setWindowSize(Math.floor(window.innerWidth), h, true); }
+  } else {
+    settingsGrew = true;
+    await setWindowSize(Math.max(460, curLayout().collapsed.w), h, false);
+  }
 }
 async function applyLayout(id, resize = true) {
   const lay = getLayout(id);
@@ -650,18 +659,24 @@ async function openConnectorsWindow() {
     });
   } catch (e) { setLine("Couldn't open connectors: " + (e?.message || e)); }
 }
-(function addSettingsButton() {
-  if (!els.rekey || !els.rekey.parentNode || document.getElementById("openSettings")) return;
+(function addHubRow() {
+  // The app-level links get their OWN row (above the API-key row) instead of
+  // being crammed into it — the gear panel stays "quick settings", this row is
+  // the doorway to the full Settings window and the connector manager.
+  const keyRow = els.rekey && els.rekey.closest ? els.rekey.closest(".set-row") : null;
+  if (!keyRow || !keyRow.parentNode || document.getElementById("openSettings")) return;
+  const row = document.createElement("div");
+  row.className = "set-row";
+  const l = document.createElement("span");
+  l.className = "set-l"; l.textContent = "Voxa";
   const b = document.createElement("button");
-  b.id = "openSettings"; b.type = "button"; b.textContent = "⚙ Settings…";
-  b.className = els.rekey.className || "";
+  b.id = "openSettings"; b.type = "button"; b.className = "link"; b.textContent = "⚙ settings…";
   b.addEventListener("click", () => { closeSettings(); openSettingsWindow(); });
-  els.rekey.parentNode.insertBefore(b, els.rekey.nextSibling);
   const c = document.createElement("button");
-  c.id = "openConnectors"; c.type = "button"; c.textContent = "🔌 Connectors…";
-  c.className = els.rekey.className || "";
+  c.id = "openConnectors"; c.type = "button"; c.className = "link"; c.textContent = "🔌 connectors…";
   c.addEventListener("click", () => { closeSettings(); openConnectorsWindow(); });
-  els.rekey.parentNode.insertBefore(c, b.nextSibling);
+  row.append(l, b, c);
+  keyRow.parentNode.insertBefore(row, keyRow);
 })();
 els.clearMem.addEventListener("click", () => {
   clearMemory();
@@ -762,15 +777,15 @@ async function openSettings() {
   buildControls();
   refreshControls();
   populateMicSel();
-  if (!expanded && TAURI) await growToSettings();
+  if (TAURI) await growToSettings();
 }
 async function closeSettings() {
   els.settings.classList.add("hidden");
   els.body.classList.remove("settings-open");
-  if (settingsGrew && !expanded) {
+  if (settingsGrew) {
     settingsGrew = false;
-    const c = curLayout().collapsed;
-    await setWindowSize(c.w, c.h, false);
+    const d = expanded ? curLayout().expanded : curLayout().collapsed;
+    await setWindowSize(d.w, d.h, expanded);
   }
 }
 els.gear.addEventListener("click", async () => {
@@ -907,6 +922,13 @@ async function setWindowSize(w, h, resizable) {
 }
 
 async function toggleExpand() {
+  // Folding/unfolding with the quick-settings open left a clipped window —
+  // dismiss the panel first; expand/collapse owns the sizing from here.
+  if (!els.settings.classList.contains("hidden")) {
+    settingsGrew = false;
+    els.settings.classList.add("hidden");
+    els.body.classList.remove("settings-open");
+  }
   expanded = !expanded;
   els.body.classList.toggle("expanded", expanded);
   els.feed.classList.toggle("hidden", !expanded);

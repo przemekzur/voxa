@@ -3,7 +3,7 @@
 A small, frameless, always-on-top **voice assistant** that floats on your desktop.
 Tap the orb and talk: Voxa listens, thinks, calls tools, and replies out loud
 through [Google Gemini Live](https://ai.google.dev/gemini-api/docs/live-api). It is
-the **v2** Voxa — a thin Tauri front-end wired to the the brain brain and a growing
+the **v2** Voxa — a thin Tauri front-end wired to the brain and a growing
 set of service **connectors** — and replaces the older .NET cockpit.
 
 ```
@@ -13,7 +13,7 @@ set of service **connectors** — and replaces the older .NET cockpit.
                 │ ToolBridge (mer— first source wins on a name clash)
         ┌───────┴───────────────┐
         ▼                       ▼
-  the brain brain          Connector harness
+  brain          Connector harness
   http://localhost:3000   http://localhost:3010
   (projects, tasks,       (weather, music, home,
    memory, knowledge…)     search, timers, …)
@@ -65,8 +65,8 @@ by a connector. New tools appear automatically on the next session; no rebuild.
 | `stay_quiet` / `notify` | (ambient mode) say nothing, or post a silent text ping |
 | `stop_music` · `pause_music` · `resume_music` · `skip_track` · `set_volume` · `volume_up` · `volume_down` | In-orb music control (only when the `vibeplay` connector is on) |
 
-### Brain tools (the brain, `:3000`)
-When the brain is running, Voxa can reach the whole the brain stack by voice —
+### Brain tools (`:3000`)
+When the brain is running, Voxa can reach the whole brain stack by voice —
 projects, tasks, epics, agents, the scheduler, budgets, sessions, system metrics,
 terminals, the knowledge base (`search_knowledge`, `store_knowledge`…), procedural
 memory (`brain_query`), and stored facts (`fact_store`, `fact_recall`). Ask it to

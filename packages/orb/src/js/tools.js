@@ -1,6 +1,6 @@
 // Tool bridge client — aggregates one or more INDEPENDENT tool sources, each
 // speaking GET /api/voice/tools + POST /api/voice/tools/call. Voxa v2 uses two:
-//   • the brain (the brain, :3000) — projects, tasks, memory, system
+//   • the brain (:3000) — projects, tasks, memory, system
 //   • the connector harness (:3010) — service integrations (Grenton, …)
 // They stay separate; this just merges their tool lists for the model and routes
 // each call back to the source that owns the tool.

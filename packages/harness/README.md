@@ -1,7 +1,7 @@
 # Voxa v2 — Connector Harness
 
 A thin layer that lets you bolt **service integrations** ("connectors") onto the
-Voxa realtime cockpit without touching the the brain brain.
+Voxa realtime cockpit without touching the brain.
 
 ## What it does
 

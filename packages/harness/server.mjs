@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ── Voxa v2 Connector Harness ──────────────────────────────────────────────
 // A thin aggregation layer that lets you add service integrations ("connectors")
-// to the Voxa realtime cockpit without touching the the brain brain.
+// to the Voxa realtime cockpit without touching the brain.
 //
 // It speaks the SAME voice-tool contract the cockpit already consumes
 // (GET /api/voice/tools, POST /api/voice/tools/call), and MERGES:

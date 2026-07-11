@@ -25,6 +25,7 @@ Voxa is a frameless, always-on-top **orb** you tap to start a realtime voice con
 
 - 🗣️ **Realtime voice** — open-mic, low-latency, barge-in. **Gemini Live**, **OpenAI Realtime**, or a **local daemon** (bring your own) — switchable in Settings.
 - 🧠 **Local brain** — a folder of `.md` files Voxa can `search`/`read`/`save` by voice (offline, no API key). Point it at an Obsidian vault if you like.
+- 🌱 **Learns across sessions** — a local learning loop distills your conversations into dated notes and recalls the relevant ones next time. Dial it from `auto` to `off` — your call.
 - 🔌 **Connectors** — weather, web search, crypto, GitHub, Hacker News, Wikipedia, timers, lists, and more. Each is one small ES module.
 - 🛠️ **Self-extension** — Voxa can **forge new HTTP connectors by voice** ("build me a connector for the OpenWeather API"), safely, from a declarative spec.
 - 🎭 **Personas & skins** — pick from built-in "souls" and themeable orb skins/palettes, or add your own.
@@ -48,6 +49,46 @@ flowchart LR
 ```
 
 The orb reads a local `voxa-config.json` and connects to the harness over a tiny HTTP contract (`GET/POST /api/voice/tools`). Any server speaking that contract is a valid tool source — so you can point Voxa at your own backend if you want.
+
+## What's new — Voxa learns (1.2 / 1.3)
+
+Voxa can now **carry context across sessions**. A local learning loop turns your
+conversations into durable memory and brings the relevant pieces back at the
+start of the next session — and a single dial controls how much it does.
+
+- **Learns from your conversations** — with learning on, the orb records the
+  turns of a session and hands them to the local harness
+  (`POST /api/learn/session`). Transcripts are written as plain JSON under the
+  harness `data/sessions/` folder and pruned on a retention window (30 days by
+  default; set `LEARN_RETENTION_DAYS` to change it).
+- **End-of-session debrief** — ending a long enough session first runs a short
+  debrief that files the facts and preferences worth keeping into Voxa's memory
+  tools.
+- **Daily learning notes** — a reflector distills recent sessions into dated
+  Markdown notes (`data/learnings/YYYY-MM-DD.md`). It can use your notes brain,
+  a Gemini REST call, or a key-free heuristic fallback — so it runs with or
+  without an API key.
+- **Session-start recall** — at the start of a new session the relevant
+  memories are fetched and folded into the system prompt, so Voxa picks up where
+  you left off instead of starting cold.
+- **A learning dial you control** — set `learning.mode` in `voxa-config.json`,
+  or say it out loud:
+
+  | Mode | What it does |
+  | --- | --- |
+  | `auto` | Records sessions, debriefs, distills notes, and pre-fetches recall automatically. |
+  | `explicit` | No automatic capture or recall — the memory and debrief tools still work when you ask for them. |
+  | `off` | No automatic learning. |
+
+  Say **"set learning mode to explicit"** to switch modes, or **"give me a
+  learning report"** for the current mode and how many sessions are on file. The
+  spoken toggle writes a `voxa.learningMode` override that wins over the config
+  file until you clear it.
+
+It's **local-first**: transcripts and notes are plain files on your machine,
+retention-pruned, and the whole loop answers to one dial. (Reflection runs on
+its own schedule, and if you wire the reflector to a notes brain that ingests
+sessions, clearing the local files won't remove what that store already kept.)
 
 ## Quick start
 

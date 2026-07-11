@@ -446,6 +446,7 @@ body.listening .wave2, body.speaking .wave2 { opacity: 1; }
   background: radial-gradient(circle at 34% 30%, var(--sw2), var(--sw) 72%);
 }
 .swatch.on { box-shadow: 0 0 0 2px var(--bg, #0b0f17), 0 0 0 3px var(--sw), 0 0 9px var(--sw); }
+.appear-hint { margin: -2px 0 0 52px; font-size: 10px; opacity: .55; line-height: 1.35; }
 
 /* While settings is open, top-align the panel so the (grown) window shows the
    controls from the top and the height measurement (scrollHeight) is accurate. */

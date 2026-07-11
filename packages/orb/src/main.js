@@ -16,7 +16,7 @@ import { createOrb } from "./js/orb.js";
 import { FocusManager } from "./js/focus.js";
 import { makeSessionId, buildSessionPayload, postSession, getLearnBase, heuristicCompact } from "./js/learn.mjs";
 import { DEBRIEF_TOOL, routeDebrief, buildDebriefRequestText, buildMiniDebriefRequestText } from "./js/debrief.mjs";
-import { normalizeLearningMode, effectiveMode, buildRecallQuery, pickRecallTool, formatRecallBlock, buildLearningReport } from "./js/learning.mjs";
+import { normalizeLearningMode, effectiveMode, buildRecallQuery, pickRecallTool, formatRecallBlock, buildLearningReport, LEARNING_MODE_ORDER, LEARNING_MODES } from "./js/learning.mjs";
 import { SKINS, PALETTES, SKIN_ORDER, PALETTE_ORDER, DEFAULT_SKIN, DEFAULT_PALETTE, getSkin, getPalette, resolveSkin, resolvePalette, extendAppearance, LAYOUTS, LAYOUT_ORDER, DEFAULT_LAYOUT, getLayout, resolveLayout } from "./js/skins.js";
 
 const TAURI = window.__TAURI__;
@@ -74,7 +74,8 @@ let expanded = false; // window expanded (chat) state — declared early for lay
 // Control-state (declared early so applyAppearance()'s boot call can no-op
 // refreshControls() before the panel is built — avoids a TDZ on first run).
 let controlsBuilt = false;
-const skinBtns = {}, palBtns = {}, modeBtns = {}, layBtns = {};
+const skinBtns = {}, palBtns = {}, modeBtns = {}, layBtns = {}, learnBtns = {};
+let learnHintEl = null;
 // RGB [0-255] -> [hueDeg, sat%] for driving the chrome's HSL accent variables.
 function rgbToHs(c) {
   const r = c[0] / 255, g = c[1] / 255, b = c[2] / 255;
@@ -969,7 +970,10 @@ function ctlChip(text, onClick) {
   return b;
 }
 function callMode(name, args) {
-  const t = AMBIENT_CONTROL_TOOLS.find((x) => x.name === name);
+  // set_learning_mode/learning_report live in LOCAL_TOOLS, not AMBIENT_CONTROL_TOOLS —
+  // check both so the settings-window chips drive the SAME handler the spoken
+  // tool uses (no second state mechanism).
+  const t = AMBIENT_CONTROL_TOOLS.find((x) => x.name === name) || LOCAL_TOOLS.find((x) => x.name === name);
   if (t) Promise.resolve(t.handler(args)).then(() => refreshControls()).catch(() => {});
 }
 function rebuildControls() {
@@ -979,6 +983,8 @@ function rebuildControls() {
   for (const k of Object.keys(palBtns)) delete palBtns[k];
   for (const k of Object.keys(layBtns)) delete layBtns[k];
   for (const k of Object.keys(modeBtns)) delete modeBtns[k];
+  for (const k of Object.keys(learnBtns)) delete learnBtns[k];
+  learnHintEl = null;
   controlsBuilt = false;
   if (!els.settings.classList.contains("hidden")) buildControls();
 }
@@ -1026,7 +1032,22 @@ function buildControls() {
   modeBtns.observe.title = "Listen-only: take silent notes, no actions";
   md.body.append(modeBtns.ambient, modeBtns.text, modeBtns.observe);
 
-  wrap.append(sk.el, pl.el, ly.el, md.el);
+  // Learning: same 3-state dial as the spoken set_learning_mode tool + the
+  // voxa.learningMode localStorage override (config > override > default
+  // auto). Clicking a chip calls set_learning_mode's own handler via callMode,
+  // so voice and the settings window always agree on the effective mode.
+  const lr = ctlSection("Learn");
+  for (const id of LEARNING_MODE_ORDER) {
+    const info = LEARNING_MODES[id];
+    const b = ctlChip(info.name, () => callMode("set_learning_mode", { mode: id }));
+    b.title = info.blurb;
+    learnBtns[id] = b;
+    lr.body.appendChild(b);
+  }
+  learnHintEl = document.createElement("div");
+  learnHintEl.className = "appear-hint";
+
+  wrap.append(sk.el, pl.el, ly.el, md.el, lr.el, learnHintEl);
   els.settings.appendChild(wrap);
   refreshControls();
 }
@@ -1038,6 +1059,13 @@ function refreshControls() {
   modeBtns.ambient?.classList.toggle("on", !!ambientMode);
   modeBtns.text?.classList.toggle("on", replyMode === "text");
   modeBtns.observe?.classList.toggle("on", !!observeMode);
+  const activeLearnMode = currentLearningMode();
+  for (const id of LEARNING_MODE_ORDER) learnBtns[id]?.classList.toggle("on", activeLearnMode === id);
+  if (learnHintEl) {
+    const base = "Auto: learns from every conversation · Explicit: only when you ask · Off: no automatic learning.";
+    const tail = store.summary ? store.summary.replace(/\s+/g, " ").trim().slice(-70) : "";
+    learnHintEl.textContent = tail ? `${base} Remembered so far: …${tail}` : base;
+  }
 }
 
 // ── Expand / collapse ──────────────────────────────────────────────────────

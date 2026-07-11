@@ -1,5 +1,15 @@
 const MODES = new Set(["auto", "explicit", "off"]);
 
+// Single source of truth for the 3-state dial's order + labels/descriptions,
+// shared by the settings-window control and (eventually) any other UI that
+// needs to render the modes — mirrors SKIN_ORDER/PALETTE_ORDER in skins.js.
+export const LEARNING_MODE_ORDER = ["auto", "explicit", "off"];
+export const LEARNING_MODES = {
+  auto: { id: "auto", name: "Auto", blurb: "Learns from every conversation." },
+  explicit: { id: "explicit", name: "Explicit", blurb: "Only learns when you ask it to." },
+  off: { id: "off", name: "Off", blurb: "No automatic learning." },
+};
+
 export function normalizeLearningMode(value) {
   const mode = String(value || "").trim().toLowerCase();
   return MODES.has(mode) ? mode : "auto";

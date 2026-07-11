@@ -16,13 +16,18 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConnectors, getConnector, allConnectors, maskConfig, effectiveConfig } from "./lib/registry.mjs";
 import { getState, getAllState, setState, unsetConfigKey } from "./lib/store.mjs";
+import { createSessionStore, isValidSessionId } from "./lib/session-store.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "3010", 10);
 const BRAIN_URL = (process.env.BRAIN_URL || "http://localhost:3000").replace(/\/$/, "");
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+// Session transcripts can be big — give the learn routes a larger body limit
+// than the default (the parser that runs first wins, so pick per-path here).
+const defaultJson = express.json({ limit: "1mb" });
+const learnJson = express.json({ limit: "2mb" });
+app.use((req, res, next) => (req.path.startsWith("/api/learn/") ? learnJson : defaultJson)(req, res, next));
 
 // Permissive localhost CORS (mirrors the brain) so the cockpit on any localhost
 // port can reach us. This must also match the Voxa orb's WebView origin, which
@@ -135,7 +140,8 @@ function isLoopback(req) {
   return a === "127.0.0.1" || a === "::1";
 }
 
-// List which secret keys are set (values never returned here).
+// List which secret keys are set (values never returned here) — loopback only,
+// so the LAN can't even enumerate which secrets exist.
 app.get("/api/secrets", async (req, res) => {
   if (!isLoopback(req)) return res.status(403).json({ error: "loopback only" });
   const cfg = (await getState(SECRETS_ID)).config || {};
@@ -227,11 +233,59 @@ app.post("/api/voice/tools/call", async (req, res) => {
   }
 });
 
+// ── Conversation-learning session store ──────────────────────────────────────
+// The voice orb posts session transcripts here (incrementally and on close) so
+// they persist beyond browser localStorage. Same data/ dir as lib/store.mjs.
+const LEARN_DATA_DIR = join(__dirname, "data");
+const sessionStore = createSessionStore({ dataDir: LEARN_DATA_DIR });
+
+// Persist/merge one session payload. Body: { sessionId, startedAt, endedAt?,
+// persona?, turns: [{who,text,ts}], actions?, summary?, debrief?, final? }.
+app.post("/api/learn/session", async (req, res) => {
+  const body = req.body || {};
+  if (!isValidSessionId(body.sessionId)) {
+    return res.status(400).json({ error: "sessionId required (3-64 chars: letters, digits, hyphens)" });
+  }
+  if (!Array.isArray(body.turns)) {
+    return res.status(400).json({ error: "turns (array) required" });
+  }
+  // Sanity cap — a well-behaved client never sends this many turns at once.
+  if (body.turns.length > 2000) {
+    return res.json({ ok: true, sessionId: body.sessionId, turns: 0, ignored: "too many turns" });
+  }
+  let record;
+  try {
+    record = sessionStore.append(body);
+  } catch (e) {
+    return res.status(400).json({ error: e?.message || String(e) });
+  }
+  res.json({ ok: true, sessionId: record.sessionId, turns: record.turns.length });
+
+  // On session end, hand the record to the reflector (ships in a later task —
+  // until then the import fails and we silently skip). Fire-and-forget.
+  if (body.final === true) {
+    try {
+      const mod = await import("./lib/reflector.mjs");
+      if (typeof mod?.reflectSession === "function") {
+        Promise.resolve(mod.reflectSession(record, { dataDir: LEARN_DATA_DIR })).catch(console.error);
+      }
+    } catch { /* reflector module not present yet — skip */ }
+  }
+});
+
+// List stored sessions (newest first, summaries only).
+app.get("/api/learn/sessions", (_req, res) => {
+  res.json({ ok: true, sessions: sessionStore.list() });
+});
+
 // ── Static management UI ─────────────────────────────────────────────────────
 app.use(express.static(join(__dirname, "public")));
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "connector-harness" }));
 
 await loadConnectors();
+// Security: bind loopback-only. Every consumer (orb, realtime-voice, the local
+// ESP bridge) reaches this over http://localhost — nothing on the LAN should be
+// able to invoke connectors or read secrets.
 app.listen(PORT, "127.0.0.1", () => {
   console.error(`[harness] Connector harness on http://localhost:${PORT}`);
   console.error(`[harness] Serves connector tools only (brain stays separate at ${BRAIN_URL}).`);

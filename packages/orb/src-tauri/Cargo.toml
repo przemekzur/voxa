@@ -1,6 +1,6 @@
 [package]
 name = "voxa"
-version = "1.1.1"
+version = "1.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -12,7 +12,11 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "voxa_orb_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop-only: just `rlib` (the bin links it). The `staticlib`/`cdylib` types
+# are mobile-only (iOS/Android entry points) — there's no `gen/apple|android`
+# project here, so building them was two extra full optimize+link passes of the
+# whole Tauri tree on every change. Add them back if/when mobile targets land.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -32,4 +36,17 @@ serde_json = "1"
 # version wry already links — the `inner()` type must match.
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2"
+
+# `tauri build` compiles in release. The orb's Rust does no hot work (it's just
+# the WebView shell + IPC), so trade peak optimization for fast rebuilds:
+#   opt-level 1     — ~full-speed codegen vs opt-level 3's heavy passes
+#   codegen-units   — max parallelism across cores
+#   incremental     — reuse codegen between rebuilds (off by default in release)
+#   lto off (default) — no whole-program re-optimize on every 1-line change
+# This is what turns a 12-min rebuild into a couple of minutes.
+[profile.release]
+opt-level = 1
+codegen-units = 256
+incremental = true
+lto = false
 

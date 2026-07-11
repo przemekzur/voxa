@@ -14,6 +14,9 @@ import { DaemonSession } from "./js/daemon.js";
 import { ToolBridge } from "./js/tools.js";
 import { createOrb } from "./js/orb.js";
 import { FocusManager } from "./js/focus.js";
+import { makeSessionId, buildSessionPayload, postSession, getLearnBase, heuristicCompact } from "./js/learn.mjs";
+import { DEBRIEF_TOOL, routeDebrief, buildDebriefRequestText, buildMiniDebriefRequestText } from "./js/debrief.mjs";
+import { normalizeLearningMode, effectiveMode, buildRecallQuery, pickRecallTool, formatRecallBlock, buildLearningReport } from "./js/learning.mjs";
 import { SKINS, PALETTES, SKIN_ORDER, PALETTE_ORDER, DEFAULT_SKIN, DEFAULT_PALETTE, getSkin, getPalette, resolveSkin, resolvePalette, extendAppearance, LAYOUTS, LAYOUT_ORDER, DEFAULT_LAYOUT, getLayout, resolveLayout } from "./js/skins.js";
 
 const TAURI = window.__TAURI__;
@@ -209,6 +212,10 @@ const SETTINGS = {
     snapshotOnFocus: true,
     maxPromptChars: 2000,
   },
+  // Conversation learning: ship session transcripts to the connector harness
+  // and auto-compact the rolling summary on session end. Overridable from
+  // voxa-config.json `learning`. mode: "auto" | "explicit" | "off".
+  learning: { mode: "auto" },
 };
 
 // ── Externalised config (authored by the desktop "Voxa" page) ────────────
@@ -219,6 +226,19 @@ const SETTINGS = {
 // session with no rebuild and no relaunch. If the brain (:3000) is offline or
 // the file is absent we silently keep the built-in defaults above.
 const CONFIG_URL = "http://localhost:3000/api/cass/voxa-config";
+
+function currentLearningMode() {
+  return effectiveMode(SETTINGS.learning?.mode, localStorage.getItem("voxa.learningMode"));
+}
+
+function savedOpenLoops() {
+  try {
+    const value = JSON.parse(localStorage.getItem("voxa.openloops") || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
 
 function applyVoxaConfig(cfg) {
   if (!cfg || typeof cfg !== "object") return;
@@ -234,7 +254,7 @@ function applyVoxaConfig(cfg) {
   const brandName =
     (typeof cfg.persona?.name === "string" && cfg.persona.name.trim()) ||
     (typeof cfg.persona?.soul === "string" && cfg.persona.soul.trim()) || "";
-  if (brandName) setBrand(brandName);
+  if (brandName) { setBrand(brandName); learn.persona = brandName; }
   const v = cfg.voice || {};
   if (typeof v.model === "string" && v.model.trim()) SETTINGS.model = v.model.trim();
   if (typeof v.voiceName === "string" && v.voiceName.trim()) SETTINGS.voice = v.voiceName.trim();
@@ -274,7 +294,28 @@ function applyVoxaConfig(cfg) {
       if (list.length) SETTINGS.focus.providerFilter = list;
     }
   }
+  // Learning dial: gates transcript egress + auto-compact (see learn state below).
+  if (cfg.learning && typeof cfg.learning === "object") {
+    const m = String(cfg.learning.mode || "").trim().toLowerCase();
+    if (m === "auto" || m === "explicit" || m === "off") SETTINGS.learning.mode = m;
+  }
   applyShortcutHint();
+}
+
+// Timeout-guarded JSON fetch: resolves the parsed body, or null on any
+// failure (non-2xx, network error, abort, bad JSON). Never throws.
+async function fetchJsonWithTimeout(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: ctrl.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function loadVoxaConfig() {
@@ -362,6 +403,120 @@ function pushHistory(who, text) {
   history.push({ who, text: t, ts: Date.now() });
   if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
   store.history = history;
+  learnRecord(who, t);
+}
+
+// ── Session learning (transcript egress to the connector harness) ──────────
+// Every recorded turn is mirrored into a per-session buffer (immune to history
+// clears/compaction), shipped incrementally every LEARN_FLUSH_EVERY turns and
+// once more, final, on session end. Gated by SETTINGS.learning.mode ("off"
+// disables egress entirely; "auto" additionally heuristic-compacts the rolling
+// summary when the model didn't checkpoint one itself this session).
+const LEARN_FLUSH_EVERY = 20;
+const LEARN_MAX_TURNS = 500;
+const LEARN_MAX_ACTIONS = 200;
+const learn = {
+  sessionId: "",
+  startedAt: 0,
+  persona: "",
+  turns: [],          // this session's user/bot turns
+  actions: [],        // this session's tool records
+  sinceFlush: 0,      // recorded entries since the last incremental post
+  modelCompacted: false, // model called compact_conversation this session
+};
+
+function beginLearnSession() {
+  learn.sessionId = makeSessionId();
+  learn.startedAt = Date.now();
+  learn.turns = [];
+  learn.actions = [];
+  learn.sinceFlush = 0;
+  learn.modelCompacted = false;
+}
+
+// ── Session debrief (forced end-of-session memory checkpoint) ───────────────
+// The model owns a `session_debrief` local tool (see LOCAL_TOOLS); its latest
+// args live here so stopSession can force a final debrief turn and the egress
+// payload can carry it. `bridge` is the live ToolBridge (sink routing target).
+const MINI_DEBRIEF_EVERY = 30; // recorded turns between mid-session checkpoints
+const debrief = {
+  latest: null,     // latest session_debrief args this session
+  receivedAt: 0,    // when the latest debrief landed (poll target for stop)
+  turnCount: 0,     // user/bot turns recorded this session (gates forced/mini)
+  bridge: null,     // active ToolBridge, set by startSession (null in observe)
+};
+
+function beginDebriefSession(bridge) {
+  debrief.latest = null;
+  debrief.receivedAt = 0;
+  debrief.turnCount = 0;
+  debrief.bridge = bridge || null;
+}
+
+// Mid-session checkpoint: every MINI_DEBRIEF_EVERY recorded turns, quietly ask
+// the model to call session_debrief so long sessions don't lose everything if
+// they end abruptly. Auto mode only, live sessions only.
+function maybeMiniDebrief() {
+  debrief.turnCount++;
+  // No bridge ⇒ observe mode ⇒ session_debrief isn't offered to the model.
+  if (currentLearningMode() !== "auto" || !session || !debrief.bridge) return;
+  if (debrief.turnCount > 0 && debrief.turnCount % MINI_DEBRIEF_EVERY === 0) {
+    try { session.sendText(buildMiniDebriefRequestText()); } catch { /* session may be tearing down */ }
+  }
+}
+
+function learnRecord(who, text) {
+  if (!learn.sessionId || currentLearningMode() !== "auto") return;
+  const entry = { who, text, ts: Date.now() };
+  if (who === "tool") {
+    learn.actions.push(entry);
+    if (learn.actions.length > LEARN_MAX_ACTIONS) learn.actions = learn.actions.slice(-LEARN_MAX_ACTIONS);
+  } else {
+    learn.turns.push(entry);
+    if (learn.turns.length > LEARN_MAX_TURNS) learn.turns = learn.turns.slice(-LEARN_MAX_TURNS);
+    maybeMiniDebrief(); // mid-session debrief checkpoint every N recorded turns
+  }
+  learn.sinceFlush++;
+  if (learn.sinceFlush >= LEARN_FLUSH_EVERY) {
+    learn.sinceFlush = 0;
+    shipLearnSession(false); // incremental checkpoint, same sessionId
+  }
+}
+
+// Fire-and-forget: postSession never throws and times out on its own.
+function shipLearnSession(final) {
+  if (!learn.sessionId || currentLearningMode() !== "auto" || !learn.turns.length) return;
+  const payload = buildSessionPayload({
+    sessionId: learn.sessionId,
+    startedAt: learn.startedAt,
+    endedAt: final ? Date.now() : undefined,
+    persona: learn.persona || undefined,
+    turns: learn.turns,
+    actions: learn.actions,
+    summary: store.summary || undefined,
+    debrief: debrief.latest || undefined,
+    final: !!final,
+  });
+  postSession(getLearnBase(SETTINGS.sources), payload);
+}
+
+// Called on every session-closed path (stopSession). Auto-compacts the rolling
+// summary if the model didn't, ships the final payload, then resets the buffer.
+function finishLearnSession() {
+  if (!learn.sessionId) return;
+  if (currentLearningMode() === "auto" && learn.turns.length) {
+    if (!learn.modelCompacted) {
+      // Persisted the same way compact_conversation does (store.summary setter
+      // writes localStorage), but WITHOUT clearing the on-screen history.
+      store.summary = heuristicCompact(store.summary, learn.turns);
+    }
+    shipLearnSession(true);
+  }
+  learn.sessionId = "";
+  learn.turns = [];
+  learn.actions = [];
+  learn.sinceFlush = 0;
+  learn.modelCompacted = false;
 }
 
 function clearMemory() {
@@ -1127,6 +1282,7 @@ const LOCAL_TOOLS = [
       if (!summary) return "No summary provided — nothing was compacted.";
       // Fold any existing summary in so we don't lose earlier checkpoints.
       store.summary = store.summary ? store.summary + "\n\n" + summary : summary;
+      learn.modelCompacted = true; // model checkpointed — skip heuristic auto-compact
       history = [];
       store.history = history;
       els.feed.innerHTML = "";
@@ -1134,6 +1290,74 @@ const LOCAL_TOOLS = [
       turn.bot = null;
       feedEmptyNote();
       return "Conversation compacted and saved to memory. On-screen history cleared.";
+    },
+  },
+  {
+    name: "set_learning_mode",
+    description:
+      "Set conversation learning to auto, explicit, or off. Use when the operator asks to enable, limit, or disable learning.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["auto", "explicit", "off"], description: "The learning mode to use." },
+      },
+      required: ["mode"],
+    },
+    handler: async (args) => {
+      const input = String(args?.mode || "").trim().toLowerCase();
+      const mode = normalizeLearningMode(input);
+      if (!input || mode !== input) return "Please choose auto, explicit, or off for learning mode.";
+      localStorage.setItem("voxa.learningMode", mode);
+      return `Learning mode is now ${mode}.`;
+    },
+  },
+  {
+    name: "learning_report",
+    description: "Report the current learning mode, remembered summary, open loops, and recorded learning-session count.",
+    parameters: { type: "object", properties: {} },
+    handler: async () => {
+      const data = await fetchJsonWithTimeout(`${getLearnBase(SETTINGS.sources)}/api/learn/sessions`, 2000);
+      const sessionCount = Array.isArray(data?.sessions) ? data.sessions.length : null;
+      return buildLearningReport({
+        mode: currentLearningMode(),
+        summary: store.summary,
+        openLoops: savedOpenLoops(),
+        sessionCount,
+      });
+    },
+  },
+  {
+    // Declaration lives in js/debrief.mjs (pure + tested); only the handler —
+    // which touches session state, localStorage and the tool bridge — is here.
+    ...DEBRIEF_TOOL,
+    handler: async (args) => {
+      const a = args && typeof args === "object" ? args : {};
+      // 1) Keep the latest debrief for the forced-stop poll + egress payload,
+      //    and persist open loops so the next session can pick them up.
+      debrief.latest = a;
+      debrief.receivedAt = Date.now();
+      try { localStorage.setItem("voxa.openloops", JSON.stringify(a.open_loops || [])); } catch {}
+      // 2) A non-empty summary checkpoints durable memory the same way
+      //    compact_conversation does (fold, don't overwrite) — but WITHOUT
+      //    clearing the on-screen history — and counts as a model checkpoint
+      //    so the heuristic auto-compact is skipped on session end.
+      const summary = String(a.summary || "").trim();
+      if (summary) {
+        store.summary = store.summary ? store.summary + "\n\n" + summary : summary;
+        learn.modelCompacted = true;
+      }
+      // 3) Route each category to whatever memory sink this session exposes.
+      const names = debrief.bridge ? debrief.bridge.declarations.map((d) => d.name) : [];
+      const plan = routeDebrief(a, names);
+      for (const step of plan) {
+        try {
+          const res = await debrief.bridge.call(step.tool, step.args);
+          if (res && res.error) addMsg("tool", `✕ debrief → ${step.tool} — ${String(res.error).slice(0, 80)}`);
+        } catch (e) {
+          addMsg("tool", `✕ debrief → ${step.tool} — ${String(e?.message || e).slice(0, 80)}`);
+        }
+      }
+      return "debrief saved";
     },
   },
 ];
@@ -1891,9 +2115,37 @@ async function startSession() {
   setStatus("Connecting");
   setLine("…");
 
+  // Fresh learning session: new sessionId + empty per-session transcript buffer.
+  beginLearnSession();
+
   // Listen & Observe: no tool bridge (so no actions are possible) and only the
   // note tools; always silent. Otherwise the normal brain + connector surface.
   const bridge = observeMode ? null : new ToolBridge(SETTINGS.sources);
+  let recallBlock = "";
+  if (bridge && currentLearningMode() === "auto") {
+    let recallTimer;
+    try {
+      const recalled = await Promise.race([
+        (async () => {
+          await bridge.load();
+          const tool = pickRecallTool(bridge.declarations.map((declaration) => declaration.name));
+          const query = buildRecallQuery({ summary: store.summary, openLoops: savedOpenLoops() });
+          return tool && query ? bridge.call(tool, { query }) : null;
+        })(),
+        new Promise((resolve) => { recallTimer = setTimeout(() => resolve(null), 3000); }),
+      ]);
+      const value = recalled && !recalled.error ? recalled.result : "";
+      const text = typeof value === "string" ? value : value ? JSON.stringify(value) : "";
+      recallBlock = formatRecallBlock(text);
+    } catch {
+      recallBlock = "";
+    } finally {
+      clearTimeout(recallTimer);
+    }
+  }
+  // Fresh debrief state for this session; the bridge is where routed debrief
+  // items are sunk (its declarations are merged once the session loads it).
+  beginDebriefSession(bridge);
   let localTools;
   if (observeMode) {
     // Observe mode: only the READ-ONLY focus tools (never route/confirm/trust).
@@ -1910,7 +2162,7 @@ async function startSession() {
     model: provider === "openai" ? (SETTINGS.openaiModel || "gpt-realtime") : SETTINGS.model,
     voice: provider === "openai" ? (SETTINGS.openaiVoice || "marin") : SETTINGS.voice,
     daemonUrl: SETTINGS.daemonUrl,
-    systemInstruction: SETTINGS.systemInstruction + (focusEnabled() ? FOCUS_GUIDE : "") + conversationContext(),
+    systemInstruction: SETTINGS.systemInstruction + (focusEnabled() ? FOCUS_GUIDE : "") + conversationContext() + (recallBlock ? "\n\n" + recallBlock : ""),
     extraInstruction: observeMode ? OBSERVE_GUIDE : ((ambientMode ? AMBIENT_GUIDE : "") + VIEWPORT_GUIDE),
     muted: observeMode || replyMode === "text",
     toolBridge: bridge,
@@ -2002,11 +2254,46 @@ async function startSession() {
   }
 }
 
+// Forced-debrief wait in progress: further stopSession calls are no-ops (the
+// pending poll below always finishes the teardown within its 8s cap).
+let debriefStopPending = false;
+const DEBRIEF_STOP_WAIT_MS = 8000;
+const DEBRIEF_STOP_POLL_MS = 250;
+const DEBRIEF_MIN_TURNS = 6;
+
 function stopSession(fromCallback = false, opts = {}) {
+  if (debriefStopPending) return; // teardown already queued behind the debrief wait
+  // Forced debrief: before tearing down a live session that actually talked,
+  // give the model one last turn to checkpoint what it learned. Only when the
+  // session is still up (not a server-side close) and learning is on auto.
+  if (
+    !fromCallback && session && currentLearningMode() === "auto" &&
+    debrief.bridge && debrief.turnCount >= DEBRIEF_MIN_TURNS
+  ) {
+    debriefStopPending = true;
+    const requestedAt = Date.now();
+    try { session.sendText(buildDebriefRequestText()); } catch {}
+    const poll = setInterval(() => {
+      const gotDebrief = debrief.receivedAt >= requestedAt;
+      if (gotDebrief || Date.now() - requestedAt >= DEBRIEF_STOP_WAIT_MS || !session) {
+        clearInterval(poll);
+        debriefStopPending = false;
+        teardownSession(fromCallback, opts);
+      }
+    }, DEBRIEF_STOP_POLL_MS);
+    return;
+  }
+  teardownSession(fromCallback, opts);
+}
+
+function teardownSession(fromCallback = false, opts = {}) {
   if (session && !fromCallback) { try { session.stop(); } catch {} }
   session = null;
   starting = false;
   sealTurn();
+  // Session over (every closed path funnels through here): auto-compact if the
+  // model didn't, and ship the final transcript to the harness (fire-and-forget).
+  finishLearnSession();
   micLevel = 0;
   setState("idle");
   setStatus("Idle");

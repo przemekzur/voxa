@@ -52,6 +52,7 @@ const els = {
   ptt: document.getElementById("ptt"),
   send: document.getElementById("send"),
   hint: document.getElementById("hint"),
+  sysstats: document.getElementById("sysstats"),
 };
 if (!TAURI) els.body.classList.add("web-preview");
 
@@ -74,7 +75,7 @@ let expanded = false; // window expanded (chat) state — declared early for lay
 // Control-state (declared early so applyAppearance()'s boot call can no-op
 // refreshControls() before the panel is built — avoids a TDZ on first run).
 let controlsBuilt = false;
-const skinBtns = {}, palBtns = {}, modeBtns = {}, layBtns = {}, learnBtns = {};
+const skinBtns = {}, palBtns = {}, modeBtns = {}, layBtns = {}, learnBtns = {}, statsBtns = {};
 let learnHintEl = null;
 // RGB [0-255] -> [hueDeg, sat%] for driving the chrome's HSL accent variables.
 function rgbToHs(c) {
@@ -984,6 +985,7 @@ function rebuildControls() {
   for (const k of Object.keys(layBtns)) delete layBtns[k];
   for (const k of Object.keys(modeBtns)) delete modeBtns[k];
   for (const k of Object.keys(learnBtns)) delete learnBtns[k];
+  for (const k of Object.keys(statsBtns)) delete statsBtns[k];
   learnHintEl = null;
   controlsBuilt = false;
   if (!els.settings.classList.contains("hidden")) buildControls();
@@ -1047,7 +1049,22 @@ function buildControls() {
   learnHintEl = document.createElement("div");
   learnHintEl.className = "appear-hint";
 
-  wrap.append(sk.el, pl.el, ly.el, md.el, lr.el, learnHintEl);
+  // Stats: which system metrics the strip above the header shows. Chips are a
+  // local display preference; the data source is the system-stats connector,
+  // toggled on/off on the harness like any other connector.
+  const st = ctlSection("Stats");
+  const statTitles = {
+    cpu: "Show CPU usage %", ram: "Show RAM usage %",
+    temp: "Show CPU temperature (needs LibreHardwareMonitor)", gpu: "Show GPU usage %",
+  };
+  for (const id of SYS_METRIC_ORDER) {
+    const b = ctlChip(SYS_METRICS[id].label, () => toggleSysMetric(id));
+    b.title = statTitles[id];
+    statsBtns[id] = b;
+    st.body.appendChild(b);
+  }
+
+  wrap.append(sk.el, pl.el, ly.el, md.el, lr.el, st.el, learnHintEl);
   els.settings.appendChild(wrap);
   refreshControls();
 }
@@ -1061,6 +1078,8 @@ function refreshControls() {
   modeBtns.observe?.classList.toggle("on", !!observeMode);
   const activeLearnMode = currentLearningMode();
   for (const id of LEARNING_MODE_ORDER) learnBtns[id]?.classList.toggle("on", activeLearnMode === id);
+  const selStats = sysStatsPref.list;
+  for (const id of SYS_METRIC_ORDER) statsBtns[id]?.classList.toggle("on", selStats.includes(id));
   if (learnHintEl) {
     const base = "Auto: learns from every conversation · Explicit: only when you ask · Off: no automatic learning.";
     const tail = store.summary ? store.summary.replace(/\s+/g, " ").trim().slice(-70) : "";
@@ -1564,6 +1583,104 @@ setInterval(() => {
   else pollSpotifyNowPlaying();
 }, 5000);
 refreshSpotifyEnabled();
+
+// ── System stats strip (system-stats connector) ─────────────────────────────
+// A slim right-aligned readout above the header row: CPU % / RAM % / CPU temp /
+// GPU %. Data comes from the harness system-stats connector (same POLL pattern
+// as the Spotify chip), so switching that connector off on the harness removes
+// the strip entirely. Which metrics show is a local preference (settings chips,
+// persisted in localStorage) — deselect all and the strip disappears too.
+const SYS_METRICS = {
+  cpu:  { label: "CPU",  lo: 60, hi: 90 },
+  ram:  { label: "RAM",  lo: 70, hi: 90 },
+  temp: { label: "Temp", lo: 60, hi: 85 },
+  gpu:  { label: "GPU",  lo: 60, hi: 90 },
+};
+const SYS_METRIC_ORDER = ["cpu", "ram", "temp", "gpu"];
+const sysStatsPref = {
+  get list() {
+    try {
+      const v = JSON.parse(localStorage.getItem("voxa.sysStats") || "null");
+      if (Array.isArray(v)) return v.filter((k) => SYS_METRICS[k]);
+    } catch { /* fall through to default */ }
+    return ["cpu", "ram", "temp"];
+  },
+  set list(v) { localStorage.setItem("voxa.sysStats", JSON.stringify(v)); },
+};
+function toggleSysMetric(id) {
+  const cur = sysStatsPref.list;
+  sysStatsPref.list = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+  sysStatsShown = ""; // force a re-render with the new selection
+  renderSysStats();
+  refreshControls();
+}
+let sysStatsEnabled = false;
+let sysStatsLast = null;  // last parsed snapshot from the connector
+let sysStatsTickN = 0;
+let sysStatsShown = "";   // last rendered key — avoids redundant DOM writes
+// green (120°) → yellow → red (0°) across the metric's lo..hi band.
+function sysColor(v, m) {
+  const t = Math.min(1, Math.max(0, (v - m.lo) / (m.hi - m.lo)));
+  return `hsl(${Math.round(120 * (1 - t))}, 72%, 55%)`;
+}
+function renderSysStats() {
+  if (!els.sysstats) return;
+  const sel = sysStatsPref.list;
+  const s = sysStatsLast;
+  const show = sysStatsEnabled && sel.length > 0 && !!s;
+  els.body.classList.toggle("stats-on", show);
+  if (!show) { els.sysstats.classList.add("hidden"); sysStatsShown = ""; return; }
+  const vals = { cpu: s.cpu, ram: s.ram, temp: s.cpuTemp, gpu: s.gpu };
+  const key = SYS_METRIC_ORDER.filter((k) => sel.includes(k)).map((k) => k + ":" + vals[k]).join("|");
+  if (key === sysStatsShown) return;
+  sysStatsShown = key;
+  els.sysstats.textContent = "";
+  for (const k of SYS_METRIC_ORDER) {
+    if (!sel.includes(k)) continue;
+    const m = SYS_METRICS[k];
+    const v = vals[k];
+    const span = document.createElement("span");
+    span.className = "ss-item";
+    if (v == null) {
+      span.textContent = k === "temp" ? "–°C" : `${m.label} –`;
+      span.title = k === "temp"
+        ? "CPU temperature unavailable on this system — see the System Stats connector"
+        : `${m.label} usage unavailable on this system`;
+    } else {
+      span.textContent = k === "temp" ? `${Math.round(v)}°C` : `${m.label} ${Math.round(v)}%`;
+      span.style.color = sysColor(v, m);
+      span.title = k === "temp" ? "CPU temperature" : `${m.label} usage`;
+    }
+    els.sysstats.appendChild(span);
+  }
+  els.sysstats.classList.remove("hidden");
+}
+async function refreshSysStatsEnabled() {
+  try {
+    const base = (SETTINGS.secretsUrl || "http://localhost:3010").replace(/\/$/, "");
+    const res = await fetch(base + "/api/connectors", { cache: "no-store" });
+    if (!res.ok) { sysStatsEnabled = false; return; }
+    const data = await res.json();
+    sysStatsEnabled = !!(data.connectors || []).find((x) => x.id === "system-stats")?.enabled;
+  } catch { sysStatsEnabled = false; }
+}
+async function pollSysStats() {
+  if (!sysStatsEnabled || sysStatsPref.list.length === 0) { sysStatsLast = null; renderSysStats(); return; }
+  try {
+    const base = (SETTINGS.secretsUrl || "http://localhost:3010").replace(/\/$/, "");
+    const res = await fetch(base + "/api/connectors/system-stats/actions/sysstats_snapshot", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args: {} }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.result) { sysStatsLast = JSON.parse(data.result); renderSysStats(); }
+  } catch { /* harness momentarily unreachable — keep showing the last reading */ }
+}
+// Refresh the enabled flag every ~30s; read the metrics every 3s.
+setInterval(() => {
+  if (sysStatsTickN++ % 10 === 0) refreshSysStatsEnabled().then(pollSysStats);
+  else pollSysStats();
+}, 3000);
+refreshSysStatsEnabled().then(pollSysStats);
 
 // Mirror the orb's music volume onto Spotify (librespot) so both players share one
 // level and "turn it up" moves them together. Fire-and-forget; no-op if Spotify is

@@ -167,6 +167,27 @@ body.idle .line { color: var(--muted); }
 .line.user { color: var(--muted); font-style: italic; }
 body.expanded .line { display: none; }
 
+/* ── System stats strip (slim readout above the header row) ───────────────── */
+.sysstats {
+  display: flex;
+  justify-content: flex-end; /* sit above the VOXA brand + window buttons */
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums; /* values tick without the strip jittering */
+  margin-bottom: 1px;
+}
+.ss-item { white-space: nowrap; }
+.ss-item + .ss-item::before { content: "·"; color: var(--muted); margin-right: 10px; }
+/* With stats showing, anchor the panel content to the top so the strip sits
+   above the header row — but keep the panel's ORIGINAL height and top gap (don't
+   trim its margins), so the glass card doesn't grow. */
+body.stats-on:not(.expanded) .panel { justify-content: flex-start; }
+
 /* ── Spotify now-playing chip (librespot plays; orb shows the track) ──────── */
 .nowplaying {
   display: flex;
@@ -480,6 +501,7 @@ body.lay-hud .panel {
 }
 body.lay-hud .brand,
 body.lay-hud .status { font-family: ui-monospace, "Cascadia Code", monospace; text-transform: uppercase; letter-spacing: .12em; }
+body.lay-hud .sysstats { font-family: ui-monospace, "Cascadia Code", monospace; letter-spacing: .1em; }
 body.lay-hud .brand { font-size: 9.5px; }
 
 /* ── Capsule — Concept 5: one sculpted glass pill wrapping the orb + panel ──── */

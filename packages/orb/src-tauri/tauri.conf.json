@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "voxa",
-  "version": "1.3.2",
-  "identifier": "com.voxa.app",
+  "version": "0.1.0",
+  "identifier": "com.voxa.orb",
   "build": {
     "frontendDist": "../src",
     "beforeDevCommand": "npm --prefix ../harness install",

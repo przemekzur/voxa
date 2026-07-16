@@ -14,6 +14,7 @@
 
 import { GoogleGenAI, Modality } from "https://esm.run/@google/genai";
 import { MicCapture, PcmPlayer, int16ToBase64, base64ToInt16 } from "./audio.js";
+import { buildMemoryGuide } from "./memory-guide.mjs";
 
 const GEMINI_OUTPUT_RATE = 24000;
 
@@ -41,30 +42,19 @@ function clampToolResponse(out) {
   return { result: `[truncated — showing last ${MAX_TOOL_RESULT_CHARS} of ${s.length} chars]\n${tail}` };
 }
 
-// Always appended to the operator's system instruction so the model knows the
-// full tool surface — especially the MEMORY tools. Without this the model
-// assumes tools are only for terminals/UI and refuses memory lookups.
+// Always appended to the operator's system instruction so the model knows it
+// has a live tool surface and how to use it. Deliberately memory-agnostic:
+// guidance about memory tools is assembled per-session by buildMemoryGuide()
+// from the tools actually loaded, so the model is never pointed at memory
+// tools a given build doesn't ship.
 export const TOOL_GUIDE =
-  "\n\nYou are wired to the the brain \"vibe brain\" via live tools: projects, " +
-  "tasks, agents, epics, the knowledge base (search_knowledge, store_knowledge, " +
-  "get_knowledge, list_knowledge), procedural memory (brain_query), stored facts " +
-  "(fact_recall, fact_store), the agent runner, scheduler, budgets, sessions, " +
-  "system metrics, terminals and the UI. When the operator asks about memory, " +
-  "knowledge, facts, past decisions, projects, tasks, or system state, CALL THE " +
-  "RELEVANT TOOL instead of guessing — e.g. brain_query or search_knowledge for " +
-  "memory/knowledge lookups, fact_recall for stored facts, list_projects/list_tasks " +
-  "for work items. Prefer acting via tools over saying you can't. IMPORTANT: tool " +
-  "calls take a moment — BEFORE you call one, say a short spoken heads-up so the " +
-  "operator isn't left waiting, e.g. \"let me query the brain…\", \"one sec, checking " +
-  "the the brain agents…\", or \"hold on, pulling that up.\" Then call the tool and " +
-  "report what you found." +
-  "\n\nSTORING TO THE BRAIN: when the operator tells you to remember, save, note, " +
-  "or \"put this in the brain\" — persist it by calling fact_store with action=\"add\" " +
-  "and a clear, self-contained `content` sentence (add comma-separated `entities` for " +
-  "the key people/projects/things it's about). These facts land in the long-term cold " +
-  "tier and are later retrievable via brain_query / fact_recall. Use store_knowledge " +
-  "instead only when it's clearly project/task documentation. Confirm out loud once " +
-  "it's saved. Don't store throwaway chatter — only durable, reusable information." +
+  "\n\nYou are wired to live tools. When the operator asks about anything a " +
+  "tool covers — projects, tasks, agents, system state, terminals, or the UI — " +
+  "CALL THE RELEVANT TOOL instead of guessing, e.g. list_projects/list_tasks " +
+  "for work items. Prefer acting via tools over saying you can't. IMPORTANT: " +
+  "tool calls take a moment — BEFORE you call one, say a short spoken heads-up " +
+  "so the operator isn't left waiting, e.g. \"one sec, checking that…\" or " +
+  "\"hold on, pulling that up.\" Then call the tool and report what you found." +
   "\n\nCONVERSATION MEMORY: your chat with the operator PERSISTS across sessions — " +
   "earlier context is provided to you at the start of each session. When the talk " +
   "gets long, or the operator says \"compact\"/\"summarize and clear\", or you want " +
@@ -195,11 +185,16 @@ export class GeminiSession {
     }
     if (fnDecls.length) tools = [{ functionDeclarations: fnDecls }];
 
+    // Memory guidance is derived from the tools actually loaded (bridge +
+    // local; just local names when there's no bridge, e.g. observe mode), so
+    // the model is only ever told about memory tools that exist in this build.
+    const memoryGuide = buildMemoryGuide(fnDecls.map((d) => d.name));
+
     this.session = await this.ai.live.connect({
       model: this.model,
       config: {
         responseModalities: [Modality.AUDIO],
-        systemInstruction: this.systemInstruction + ((this.toolBridge || this.localTools.length) ? TOOL_GUIDE : "") + (this.extraInstruction || ""),
+        systemInstruction: this.systemInstruction + ((this.toolBridge || this.localTools.length) ? TOOL_GUIDE : "") + memoryGuide + (this.extraInstruction || ""),
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: this.voice } },
         },

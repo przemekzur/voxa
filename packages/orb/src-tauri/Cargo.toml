@@ -1,6 +1,6 @@
 [package]
 name = "voxa"
-version = "0.1.0"
+version = "1.3.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -27,6 +27,15 @@ tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Linux only: WebKitGTK ships getUserMedia OFF and denies every media
+# permission request by default, so the mic never starts (and the realtime
+# session closes on us). We reach through Tauri's `with_webview` to the
+# underlying `webkit2gtk::WebView` to enable media-stream and grant the
+# permission request. Unresolved (unpinned) so Cargo unifies it to the exact
+# version wry already links — the `inner()` type must match.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2"
 
 # `tauri build` compiles in release. The orb's Rust does no hot work (it's just
 # the WebView shell + IPC), so trade peak optimization for fast rebuilds:

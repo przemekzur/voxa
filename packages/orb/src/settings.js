@@ -130,6 +130,22 @@ $("resetSoul").addEventListener("click", () => {
   setStatus("Reset to preset — Save to keep.");
 });
 $("openBrain").addEventListener("click", () => { try { invoke?.("open_brain_folder"); } catch (e) { setStatus("Open failed: " + (e?.message || e)); } });
+// Open the connector manager (harness UI) as an app window — same "connectors"
+// label the orb uses, so there's only ever one manager window.
+$("openConnectors").addEventListener("click", async () => {
+  const url = ($("source").value.trim() || "http://localhost:3010").replace(/\/+$/, "");
+  const WW = TAURI?.webviewWindow?.WebviewWindow || TAURI?.window?.WebviewWindow;
+  if (!WW) { try { window.open(url, "_blank"); } catch {} return; }
+  try {
+    const existing = await WW.getByLabel("connectors");
+    if (existing) { await existing.setFocus(); return; }
+    new WW("connectors", {
+      url, title: "Voxa Connectors",
+      width: 1080, height: 760, resizable: true, decorations: true,
+      transparent: false, alwaysOnTop: false, focus: true, center: true,
+    });
+  } catch (e) { setStatus("Couldn't open connectors: " + (e?.message || e)); }
+});
 $("save").addEventListener("click", save);
 $("close").addEventListener("click", async () => {
   try { await TAURI?.window?.getCurrentWindow?.().close(); } catch { window.close(); }

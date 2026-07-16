@@ -258,5 +258,21 @@ els.mSave.addEventListener("click", save);
 els.mTest.addEventListener("click", test);
 els.reloadBtn.addEventListener("click", async () => { await api("/api/reload", { method: "POST" }); toast("connectors reloaded"); refresh(); });
 
+// Bulk enable/disable — one click instead of twenty toggles.
+async function setAll(enabled) {
+  const targets = CONNECTORS.filter((c) => c.enabled !== enabled);
+  if (!targets.length) return toast(enabled ? "All connectors are already enabled" : "All connectors are already off");
+  for (const c of targets) {
+    await api(`/api/connectors/${c.id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+  }
+  toast(`${enabled ? "Enabled" : "Disabled"} ${targets.length} connector${targets.length === 1 ? "" : "s"}`);
+  refresh();
+}
+$("#enableAllBtn")?.addEventListener("click", () => setAll(true));
+$("#disableAllBtn")?.addEventListener("click", () => setAll(false));
+
 refresh();
 setInterval(pingBridge, 5000);

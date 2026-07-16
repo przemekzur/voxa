@@ -46,9 +46,10 @@ export default {
 };
 ```
 
-Then in the harness UI (**http://localhost:3010**) click **Reload**, toggle the
-connector **on**, fill any config, and **Test**. Its tools appear on the orb's
-next session.
+Then in the harness UI (orb gear → **🔌 Connectors…**, or **http://localhost:3010**)
+click **Reload**, fill any config, and **Test** — new connectors are enabled by
+default unless they set `defaultEnabled: false` or have unfilled required config.
+Its tools appear on the orb's next session.
 
 ### Rules that matter
 

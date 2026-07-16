@@ -1,0 +1,77 @@
+name: release
+
+# Build signed-able installers for all three desktop platforms and publish them
+# to a GitHub Release. Triggered by pushing a version tag (e.g. `v0.1.0`).
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Produces: Windows (.msi + NSIS .exe), macOS (universal .dmg), Linux (.AppImage + .deb).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - os: ubuntu-latest
+            args: ''
+            rust-targets: ''
+          - os: windows-latest
+            args: ''
+            rust-targets: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux WebKitGTK deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install orb dependencies
+        working-directory: packages/orb
+        run: npm install
+
+      - name: Build & publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: packages/orb
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Voxa ${{ github.ref_name }}'
+          releaseBody: |
+            Desktop voice orb — download the installer for your platform below.
+
+            - **Windows:** `.msi` or the NSIS `-setup.exe`
+            - **macOS:** the universal `.dmg`
+            - **Linux:** `.AppImage` or `.deb`
+
+            > Voxa launches its bundled connector harness (tools + the local notes
+            > brain) automatically — it just needs Node 18+ on your PATH. All
+            > connectors ship enabled; manage them from the orb's gear → 🔌 Connectors.
+            > See the [README quick-start](https://github.com/przemekzur/voxa#quick-start).
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

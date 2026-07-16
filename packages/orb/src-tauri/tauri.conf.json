@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.voxa.orb",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeDevCommand": "npm --prefix ../harness install",
+    "beforeBuildCommand": "npm --prefix ../harness install"
   },
   "app": {
     "withGlobalTauri": true,
@@ -48,6 +50,14 @@
           "libwebkit2gtk-4.1-0"
         ]
       }
+    },
+    "resources": {
+      "../../harness/server.mjs": "harness/server.mjs",
+      "../../harness/package.json": "harness/package.json",
+      "../../harness/lib": "harness/lib",
+      "../../harness/connectors": "harness/connectors",
+      "../../harness/public": "harness/public",
+      "../../harness/node_modules": "harness/node_modules"
     }
   }
 }

@@ -56,7 +56,9 @@
       <div class="stats" id="stats"></div>
       <div class="filters">
         <input id="search" class="search" type="search" placeholder="Filter connectors…" autocomplete="off" />
-        <div class="seg" id="statusFilter" role="tablist">
+        <button class="btn ghost sm" id="enableAllBtn" title="Turn every connector on">Enable all</button>
+          <button class="btn ghost sm" id="disableAllBtn" title="Turn every connector off">Disable all</button>
+          <div class="seg" id="statusFilter" role="tablist">
           <button class="seg-b is-on" data-f="all">All</button>
           <button class="seg-b" data-f="enabled">Enabled</button>
           <button class="seg-b" data-f="disabled">Off</button>

@@ -14,6 +14,9 @@ import { DaemonSession } from "./js/daemon.js";
 import { ToolBridge } from "./js/tools.js";
 import { createOrb } from "./js/orb.js";
 import { FocusManager } from "./js/focus.js";
+import { makeSessionId, buildSessionPayload, postSession, getLearnBase, heuristicCompact } from "./js/learn.mjs";
+import { DEBRIEF_TOOL, routeDebrief, buildDebriefRequestText, buildMiniDebriefRequestText } from "./js/debrief.mjs";
+import { normalizeLearningMode, effectiveMode, buildRecallQuery, pickRecallTool, formatRecallBlock, buildLearningReport, LEARNING_MODE_ORDER, LEARNING_MODES } from "./js/learning.mjs";
 import { SKINS, PALETTES, SKIN_ORDER, PALETTE_ORDER, DEFAULT_SKIN, DEFAULT_PALETTE, getSkin, getPalette, resolveSkin, resolvePalette, extendAppearance, LAYOUTS, LAYOUT_ORDER, DEFAULT_LAYOUT, getLayout, resolveLayout } from "./js/skins.js";
 
 const TAURI = window.__TAURI__;
@@ -49,6 +52,7 @@ const els = {
   ptt: document.getElementById("ptt"),
   send: document.getElementById("send"),
   hint: document.getElementById("hint"),
+  sysstats: document.getElementById("sysstats"),
 };
 if (!TAURI) els.body.classList.add("web-preview");
 
@@ -71,7 +75,8 @@ let expanded = false; // window expanded (chat) state — declared early for lay
 // Control-state (declared early so applyAppearance()'s boot call can no-op
 // refreshControls() before the panel is built — avoids a TDZ on first run).
 let controlsBuilt = false;
-const skinBtns = {}, palBtns = {}, modeBtns = {}, layBtns = {};
+const skinBtns = {}, palBtns = {}, modeBtns = {}, layBtns = {}, learnBtns = {}, statsBtns = {};
+let learnHintEl = null;
 // RGB [0-255] -> [hueDeg, sat%] for driving the chrome's HSL accent variables.
 function rgbToHs(c) {
   const r = c[0] / 255, g = c[1] / 255, b = c[2] / 255;
@@ -108,15 +113,24 @@ function chooseSkin(id) { const s = getSkin(id); appearance.skin = s.id; applyAp
 function choosePalette(id) { const p = getPalette(id); appearance.palette = p.id; applyAppearance(); return p; }
 // ── Layout (window arrangement; switchable at runtime) ──────────────────────
 async function growToSettings() {
-  // Settings is taller than the collapsed window. Measuring is unreliable here (the
-  // panel is align-self:stretch so its box is clamped to the tiny window), so grow
-  // to a fixed per-layout settings size that comfortably fits all controls.
-  // `settings-open` top-aligns the panel so the controls read from the top.
+  // Auto-fit: size the window to the settings panel's ACTUAL content (chip rows
+  // wrap; rows get added over time) instead of a fixed height — no scrollbar.
+  // `settings-open` top-aligns the panel; the shortfall is the settings box's
+  // scrollHeight minus what it was given. Cap to the current monitor.
   els.body.classList.add("settings-open");
-  settingsGrew = true;
-  const lay = curLayout();
-  const w = Math.max(460, lay.collapsed.w);
-  await setWindowSize(w, lay.settingsH || 480, false);
+  const need = els.settings.scrollHeight - els.settings.clientHeight;
+  let h = Math.ceil(window.innerHeight + Math.max(0, need) + 6);
+  try {
+    const mon = await TAURI.window.currentMonitor();
+    if (mon) h = Math.min(h, Math.floor(mon.size.height / (mon.scaleFactor || 1)) - 90);
+  } catch { /* no monitor info — keep the measured height */ }
+  if (expanded) {
+    // Expanded is user-resizable: only GROW to fit, never shrink their window.
+    if (need > 0) { settingsGrew = true; await setWindowSize(Math.floor(window.innerWidth), h, true); }
+  } else {
+    settingsGrew = true;
+    await setWindowSize(Math.max(460, curLayout().collapsed.w), h, false);
+  }
 }
 async function applyLayout(id, resize = true) {
   const lay = getLayout(id);
@@ -200,6 +214,10 @@ const SETTINGS = {
     snapshotOnFocus: true,
     maxPromptChars: 2000,
   },
+  // Conversation learning: ship session transcripts to the connector harness
+  // and auto-compact the rolling summary on session end. Overridable from
+  // voxa-config.json `learning`. mode: "auto" | "explicit" | "off".
+  learning: { mode: "auto" },
 };
 
 // ── Externalised config (authored by the desktop "Voxa" page) ────────────
@@ -210,6 +228,19 @@ const SETTINGS = {
 // session with no rebuild and no relaunch. If the brain (:3000) is offline or
 // the file is absent we silently keep the built-in defaults above.
 const CONFIG_URL = "http://localhost:3000/api/cass/voxa-config";
+
+function currentLearningMode() {
+  return effectiveMode(SETTINGS.learning?.mode, localStorage.getItem("voxa.learningMode"));
+}
+
+function savedOpenLoops() {
+  try {
+    const value = JSON.parse(localStorage.getItem("voxa.openloops") || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
 
 function applyVoxaConfig(cfg) {
   if (!cfg || typeof cfg !== "object") return;
@@ -225,7 +256,7 @@ function applyVoxaConfig(cfg) {
   const brandName =
     (typeof cfg.persona?.name === "string" && cfg.persona.name.trim()) ||
     (typeof cfg.persona?.soul === "string" && cfg.persona.soul.trim()) || "";
-  if (brandName) setBrand(brandName);
+  if (brandName) { setBrand(brandName); learn.persona = brandName; }
   const v = cfg.voice || {};
   if (typeof v.model === "string" && v.model.trim()) SETTINGS.model = v.model.trim();
   if (typeof v.voiceName === "string" && v.voiceName.trim()) SETTINGS.voice = v.voiceName.trim();
@@ -265,7 +296,28 @@ function applyVoxaConfig(cfg) {
       if (list.length) SETTINGS.focus.providerFilter = list;
     }
   }
+  // Learning dial: gates transcript egress + auto-compact (see learn state below).
+  if (cfg.learning && typeof cfg.learning === "object") {
+    const m = String(cfg.learning.mode || "").trim().toLowerCase();
+    if (m === "auto" || m === "explicit" || m === "off") SETTINGS.learning.mode = m;
+  }
   applyShortcutHint();
+}
+
+// Timeout-guarded JSON fetch: resolves the parsed body, or null on any
+// failure (non-2xx, network error, abort, bad JSON). Never throws.
+async function fetchJsonWithTimeout(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: ctrl.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function loadVoxaConfig() {
@@ -353,6 +405,120 @@ function pushHistory(who, text) {
   history.push({ who, text: t, ts: Date.now() });
   if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
   store.history = history;
+  learnRecord(who, t);
+}
+
+// ── Session learning (transcript egress to the connector harness) ──────────
+// Every recorded turn is mirrored into a per-session buffer (immune to history
+// clears/compaction), shipped incrementally every LEARN_FLUSH_EVERY turns and
+// once more, final, on session end. Gated by SETTINGS.learning.mode ("off"
+// disables egress entirely; "auto" additionally heuristic-compacts the rolling
+// summary when the model didn't checkpoint one itself this session).
+const LEARN_FLUSH_EVERY = 20;
+const LEARN_MAX_TURNS = 500;
+const LEARN_MAX_ACTIONS = 200;
+const learn = {
+  sessionId: "",
+  startedAt: 0,
+  persona: "",
+  turns: [],          // this session's user/bot turns
+  actions: [],        // this session's tool records
+  sinceFlush: 0,      // recorded entries since the last incremental post
+  modelCompacted: false, // model called compact_conversation this session
+};
+
+function beginLearnSession() {
+  learn.sessionId = makeSessionId();
+  learn.startedAt = Date.now();
+  learn.turns = [];
+  learn.actions = [];
+  learn.sinceFlush = 0;
+  learn.modelCompacted = false;
+}
+
+// ── Session debrief (forced end-of-session memory checkpoint) ───────────────
+// The model owns a `session_debrief` local tool (see LOCAL_TOOLS); its latest
+// args live here so stopSession can force a final debrief turn and the egress
+// payload can carry it. `bridge` is the live ToolBridge (sink routing target).
+const MINI_DEBRIEF_EVERY = 30; // recorded turns between mid-session checkpoints
+const debrief = {
+  latest: null,     // latest session_debrief args this session
+  receivedAt: 0,    // when the latest debrief landed (poll target for stop)
+  turnCount: 0,     // user/bot turns recorded this session (gates forced/mini)
+  bridge: null,     // active ToolBridge, set by startSession (null in observe)
+};
+
+function beginDebriefSession(bridge) {
+  debrief.latest = null;
+  debrief.receivedAt = 0;
+  debrief.turnCount = 0;
+  debrief.bridge = bridge || null;
+}
+
+// Mid-session checkpoint: every MINI_DEBRIEF_EVERY recorded turns, quietly ask
+// the model to call session_debrief so long sessions don't lose everything if
+// they end abruptly. Auto mode only, live sessions only.
+function maybeMiniDebrief() {
+  debrief.turnCount++;
+  // No bridge ⇒ observe mode ⇒ session_debrief isn't offered to the model.
+  if (currentLearningMode() !== "auto" || !session || !debrief.bridge) return;
+  if (debrief.turnCount > 0 && debrief.turnCount % MINI_DEBRIEF_EVERY === 0) {
+    try { session.sendText(buildMiniDebriefRequestText()); } catch { /* session may be tearing down */ }
+  }
+}
+
+function learnRecord(who, text) {
+  if (!learn.sessionId || currentLearningMode() !== "auto") return;
+  const entry = { who, text, ts: Date.now() };
+  if (who === "tool") {
+    learn.actions.push(entry);
+    if (learn.actions.length > LEARN_MAX_ACTIONS) learn.actions = learn.actions.slice(-LEARN_MAX_ACTIONS);
+  } else {
+    learn.turns.push(entry);
+    if (learn.turns.length > LEARN_MAX_TURNS) learn.turns = learn.turns.slice(-LEARN_MAX_TURNS);
+    maybeMiniDebrief(); // mid-session debrief checkpoint every N recorded turns
+  }
+  learn.sinceFlush++;
+  if (learn.sinceFlush >= LEARN_FLUSH_EVERY) {
+    learn.sinceFlush = 0;
+    shipLearnSession(false); // incremental checkpoint, same sessionId
+  }
+}
+
+// Fire-and-forget: postSession never throws and times out on its own.
+function shipLearnSession(final) {
+  if (!learn.sessionId || currentLearningMode() !== "auto" || !learn.turns.length) return;
+  const payload = buildSessionPayload({
+    sessionId: learn.sessionId,
+    startedAt: learn.startedAt,
+    endedAt: final ? Date.now() : undefined,
+    persona: learn.persona || undefined,
+    turns: learn.turns,
+    actions: learn.actions,
+    summary: store.summary || undefined,
+    debrief: debrief.latest || undefined,
+    final: !!final,
+  });
+  postSession(getLearnBase(SETTINGS.sources), payload);
+}
+
+// Called on every session-closed path (stopSession). Auto-compacts the rolling
+// summary if the model didn't, ships the final payload, then resets the buffer.
+function finishLearnSession() {
+  if (!learn.sessionId) return;
+  if (currentLearningMode() === "auto" && learn.turns.length) {
+    if (!learn.modelCompacted) {
+      // Persisted the same way compact_conversation does (store.summary setter
+      // writes localStorage), but WITHOUT clearing the on-screen history.
+      store.summary = heuristicCompact(store.summary, learn.turns);
+    }
+    shipLearnSession(true);
+  }
+  learn.sessionId = "";
+  learn.turns = [];
+  learn.actions = [];
+  learn.sinceFlush = 0;
+  learn.modelCompacted = false;
 }
 
 function clearMemory() {
@@ -629,13 +795,45 @@ async function openSettingsWindow() {
     });
   } catch (e) { setLine("Couldn't open settings: " + (e?.message || e)); }
 }
-(function addSettingsButton() {
-  if (!els.rekey || !els.rekey.parentNode || document.getElementById("openSettings")) return;
+// Voxa: the connector manager (harness UI) as an app window, so connectors are
+// one tap from the orb instead of "type localhost:3010 into a browser".
+function harnessUrl() {
+  return (((SETTINGS.sources || [])[0] || {}).url || "http://localhost:3010").replace(/\/+$/, "");
+}
+async function openConnectorsWindow() {
+  const url = harnessUrl();
+  try { await fetch(url + "/health", { cache: "no-store" }); }
+  catch { setLine("Connector harness isn't running at " + url); return; }
+  const WebviewWindow = getWebviewWindow();
+  if (!WebviewWindow) { try { window.open(url, "_blank"); } catch {} return; }
+  try {
+    const existing = await WebviewWindow.getByLabel("connectors");
+    if (existing) { try { await existing.setFocus(); } catch {} return; }
+    new WebviewWindow("connectors", {
+      url, title: "Voxa Connectors",
+      width: 1080, height: 760, resizable: true, decorations: true,
+      transparent: false, alwaysOnTop: false, focus: true, center: true,
+    });
+  } catch (e) { setLine("Couldn't open connectors: " + (e?.message || e)); }
+}
+(function addHubRow() {
+  // The app-level links get their OWN row (above the API-key row) instead of
+  // being crammed into it — the gear panel stays "quick settings", this row is
+  // the doorway to the full Settings window and the connector manager.
+  const keyRow = els.rekey && els.rekey.closest ? els.rekey.closest(".set-row") : null;
+  if (!keyRow || !keyRow.parentNode || document.getElementById("openSettings")) return;
+  const row = document.createElement("div");
+  row.className = "set-row";
+  const l = document.createElement("span");
+  l.className = "set-l"; l.textContent = "Voxa";
   const b = document.createElement("button");
-  b.id = "openSettings"; b.type = "button"; b.textContent = "⚙ Settings…";
-  b.className = els.rekey.className || "";
+  b.id = "openSettings"; b.type = "button"; b.className = "link"; b.textContent = "⚙ settings…";
   b.addEventListener("click", () => { closeSettings(); openSettingsWindow(); });
-  els.rekey.parentNode.insertBefore(b, els.rekey.nextSibling);
+  const c = document.createElement("button");
+  c.id = "openConnectors"; c.type = "button"; c.className = "link"; c.textContent = "🔌 connectors…";
+  c.addEventListener("click", () => { closeSettings(); openConnectorsWindow(); });
+  row.append(l, b, c);
+  keyRow.parentNode.insertBefore(row, keyRow);
 })();
 els.clearMem.addEventListener("click", () => {
   clearMemory();
@@ -736,15 +934,15 @@ async function openSettings() {
   buildControls();
   refreshControls();
   populateMicSel();
-  if (!expanded && TAURI) await growToSettings();
+  if (TAURI) await growToSettings();
 }
 async function closeSettings() {
   els.settings.classList.add("hidden");
   els.body.classList.remove("settings-open");
-  if (settingsGrew && !expanded) {
+  if (settingsGrew) {
     settingsGrew = false;
-    const c = curLayout().collapsed;
-    await setWindowSize(c.w, c.h, false);
+    const d = expanded ? curLayout().expanded : curLayout().collapsed;
+    await setWindowSize(d.w, d.h, expanded);
   }
 }
 els.gear.addEventListener("click", async () => {
@@ -773,7 +971,10 @@ function ctlChip(text, onClick) {
   return b;
 }
 function callMode(name, args) {
-  const t = AMBIENT_CONTROL_TOOLS.find((x) => x.name === name);
+  // set_learning_mode/learning_report live in LOCAL_TOOLS, not AMBIENT_CONTROL_TOOLS —
+  // check both so the settings-window chips drive the SAME handler the spoken
+  // tool uses (no second state mechanism).
+  const t = AMBIENT_CONTROL_TOOLS.find((x) => x.name === name) || LOCAL_TOOLS.find((x) => x.name === name);
   if (t) Promise.resolve(t.handler(args)).then(() => refreshControls()).catch(() => {});
 }
 function rebuildControls() {
@@ -783,6 +984,9 @@ function rebuildControls() {
   for (const k of Object.keys(palBtns)) delete palBtns[k];
   for (const k of Object.keys(layBtns)) delete layBtns[k];
   for (const k of Object.keys(modeBtns)) delete modeBtns[k];
+  for (const k of Object.keys(learnBtns)) delete learnBtns[k];
+  for (const k of Object.keys(statsBtns)) delete statsBtns[k];
+  learnHintEl = null;
   controlsBuilt = false;
   if (!els.settings.classList.contains("hidden")) buildControls();
 }
@@ -830,7 +1034,37 @@ function buildControls() {
   modeBtns.observe.title = "Listen-only: take silent notes, no actions";
   md.body.append(modeBtns.ambient, modeBtns.text, modeBtns.observe);
 
-  wrap.append(sk.el, pl.el, ly.el, md.el);
+  // Learning: same 3-state dial as the spoken set_learning_mode tool + the
+  // voxa.learningMode localStorage override (config > override > default
+  // auto). Clicking a chip calls set_learning_mode's own handler via callMode,
+  // so voice and the settings window always agree on the effective mode.
+  const lr = ctlSection("Learn");
+  for (const id of LEARNING_MODE_ORDER) {
+    const info = LEARNING_MODES[id];
+    const b = ctlChip(info.name, () => callMode("set_learning_mode", { mode: id }));
+    b.title = info.blurb;
+    learnBtns[id] = b;
+    lr.body.appendChild(b);
+  }
+  learnHintEl = document.createElement("div");
+  learnHintEl.className = "appear-hint";
+
+  // Stats: which system metrics the strip above the header shows. Chips are a
+  // local display preference; the data source is the system-stats connector,
+  // toggled on/off on the harness like any other connector.
+  const st = ctlSection("Stats");
+  const statTitles = {
+    cpu: "Show CPU usage %", ram: "Show RAM usage %",
+    temp: "Show CPU temperature (needs LibreHardwareMonitor)", gpu: "Show GPU usage %",
+  };
+  for (const id of SYS_METRIC_ORDER) {
+    const b = ctlChip(SYS_METRICS[id].label, () => toggleSysMetric(id));
+    b.title = statTitles[id];
+    statsBtns[id] = b;
+    st.body.appendChild(b);
+  }
+
+  wrap.append(sk.el, pl.el, ly.el, md.el, lr.el, st.el, learnHintEl);
   els.settings.appendChild(wrap);
   refreshControls();
 }
@@ -842,6 +1076,15 @@ function refreshControls() {
   modeBtns.ambient?.classList.toggle("on", !!ambientMode);
   modeBtns.text?.classList.toggle("on", replyMode === "text");
   modeBtns.observe?.classList.toggle("on", !!observeMode);
+  const activeLearnMode = currentLearningMode();
+  for (const id of LEARNING_MODE_ORDER) learnBtns[id]?.classList.toggle("on", activeLearnMode === id);
+  const selStats = sysStatsPref.list;
+  for (const id of SYS_METRIC_ORDER) statsBtns[id]?.classList.toggle("on", selStats.includes(id));
+  if (learnHintEl) {
+    const base = "Auto: learns from every conversation · Explicit: only when you ask · Off: no automatic learning.";
+    const tail = store.summary ? store.summary.replace(/\s+/g, " ").trim().slice(-70) : "";
+    learnHintEl.textContent = tail ? `${base} Remembered so far: …${tail}` : base;
+  }
 }
 
 // ── Expand / collapse ──────────────────────────────────────────────────────
@@ -881,6 +1124,13 @@ async function setWindowSize(w, h, resizable) {
 }
 
 async function toggleExpand() {
+  // Folding/unfolding with the quick-settings open left a clipped window —
+  // dismiss the panel first; expand/collapse owns the sizing from here.
+  if (!els.settings.classList.contains("hidden")) {
+    settingsGrew = false;
+    els.settings.classList.add("hidden");
+    els.body.classList.remove("settings-open");
+  }
   expanded = !expanded;
   els.body.classList.toggle("expanded", expanded);
   els.feed.classList.toggle("hidden", !expanded);
@@ -1079,6 +1329,7 @@ const LOCAL_TOOLS = [
       if (!summary) return "No summary provided — nothing was compacted.";
       // Fold any existing summary in so we don't lose earlier checkpoints.
       store.summary = store.summary ? store.summary + "\n\n" + summary : summary;
+      learn.modelCompacted = true; // model checkpointed — skip heuristic auto-compact
       history = [];
       store.history = history;
       els.feed.innerHTML = "";
@@ -1086,6 +1337,74 @@ const LOCAL_TOOLS = [
       turn.bot = null;
       feedEmptyNote();
       return "Conversation compacted and saved to memory. On-screen history cleared.";
+    },
+  },
+  {
+    name: "set_learning_mode",
+    description:
+      "Set conversation learning to auto, explicit, or off. Use when the operator asks to enable, limit, or disable learning.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["auto", "explicit", "off"], description: "The learning mode to use." },
+      },
+      required: ["mode"],
+    },
+    handler: async (args) => {
+      const input = String(args?.mode || "").trim().toLowerCase();
+      const mode = normalizeLearningMode(input);
+      if (!input || mode !== input) return "Please choose auto, explicit, or off for learning mode.";
+      localStorage.setItem("voxa.learningMode", mode);
+      return `Learning mode is now ${mode}.`;
+    },
+  },
+  {
+    name: "learning_report",
+    description: "Report the current learning mode, remembered summary, open loops, and recorded learning-session count.",
+    parameters: { type: "object", properties: {} },
+    handler: async () => {
+      const data = await fetchJsonWithTimeout(`${getLearnBase(SETTINGS.sources)}/api/learn/sessions`, 2000);
+      const sessionCount = Array.isArray(data?.sessions) ? data.sessions.length : null;
+      return buildLearningReport({
+        mode: currentLearningMode(),
+        summary: store.summary,
+        openLoops: savedOpenLoops(),
+        sessionCount,
+      });
+    },
+  },
+  {
+    // Declaration lives in js/debrief.mjs (pure + tested); only the handler —
+    // which touches session state, localStorage and the tool bridge — is here.
+    ...DEBRIEF_TOOL,
+    handler: async (args) => {
+      const a = args && typeof args === "object" ? args : {};
+      // 1) Keep the latest debrief for the forced-stop poll + egress payload,
+      //    and persist open loops so the next session can pick them up.
+      debrief.latest = a;
+      debrief.receivedAt = Date.now();
+      try { localStorage.setItem("voxa.openloops", JSON.stringify(a.open_loops || [])); } catch {}
+      // 2) A non-empty summary checkpoints durable memory the same way
+      //    compact_conversation does (fold, don't overwrite) — but WITHOUT
+      //    clearing the on-screen history — and counts as a model checkpoint
+      //    so the heuristic auto-compact is skipped on session end.
+      const summary = String(a.summary || "").trim();
+      if (summary) {
+        store.summary = store.summary ? store.summary + "\n\n" + summary : summary;
+        learn.modelCompacted = true;
+      }
+      // 3) Route each category to whatever memory sink this session exposes.
+      const names = debrief.bridge ? debrief.bridge.declarations.map((d) => d.name) : [];
+      const plan = routeDebrief(a, names);
+      for (const step of plan) {
+        try {
+          const res = await debrief.bridge.call(step.tool, step.args);
+          if (res && res.error) addMsg("tool", `✕ debrief → ${step.tool} — ${String(res.error).slice(0, 80)}`);
+        } catch (e) {
+          addMsg("tool", `✕ debrief → ${step.tool} — ${String(e?.message || e).slice(0, 80)}`);
+        }
+      }
+      return "debrief saved";
     },
   },
 ];
@@ -1264,6 +1583,104 @@ setInterval(() => {
   else pollSpotifyNowPlaying();
 }, 5000);
 refreshSpotifyEnabled();
+
+// ── System stats strip (system-stats connector) ─────────────────────────────
+// A slim right-aligned readout above the header row: CPU % / RAM % / CPU temp /
+// GPU %. Data comes from the harness system-stats connector (same POLL pattern
+// as the Spotify chip), so switching that connector off on the harness removes
+// the strip entirely. Which metrics show is a local preference (settings chips,
+// persisted in localStorage) — deselect all and the strip disappears too.
+const SYS_METRICS = {
+  cpu:  { label: "CPU",  lo: 60, hi: 90 },
+  ram:  { label: "RAM",  lo: 70, hi: 90 },
+  temp: { label: "Temp", lo: 60, hi: 85 },
+  gpu:  { label: "GPU",  lo: 60, hi: 90 },
+};
+const SYS_METRIC_ORDER = ["cpu", "ram", "temp", "gpu"];
+const sysStatsPref = {
+  get list() {
+    try {
+      const v = JSON.parse(localStorage.getItem("voxa.sysStats") || "null");
+      if (Array.isArray(v)) return v.filter((k) => SYS_METRICS[k]);
+    } catch { /* fall through to default */ }
+    return ["cpu", "ram", "temp"];
+  },
+  set list(v) { localStorage.setItem("voxa.sysStats", JSON.stringify(v)); },
+};
+function toggleSysMetric(id) {
+  const cur = sysStatsPref.list;
+  sysStatsPref.list = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+  sysStatsShown = ""; // force a re-render with the new selection
+  renderSysStats();
+  refreshControls();
+}
+let sysStatsEnabled = false;
+let sysStatsLast = null;  // last parsed snapshot from the connector
+let sysStatsTickN = 0;
+let sysStatsShown = "";   // last rendered key — avoids redundant DOM writes
+// green (120°) → yellow → red (0°) across the metric's lo..hi band.
+function sysColor(v, m) {
+  const t = Math.min(1, Math.max(0, (v - m.lo) / (m.hi - m.lo)));
+  return `hsl(${Math.round(120 * (1 - t))}, 72%, 55%)`;
+}
+function renderSysStats() {
+  if (!els.sysstats) return;
+  const sel = sysStatsPref.list;
+  const s = sysStatsLast;
+  const show = sysStatsEnabled && sel.length > 0 && !!s;
+  els.body.classList.toggle("stats-on", show);
+  if (!show) { els.sysstats.classList.add("hidden"); sysStatsShown = ""; return; }
+  const vals = { cpu: s.cpu, ram: s.ram, temp: s.cpuTemp, gpu: s.gpu };
+  const key = SYS_METRIC_ORDER.filter((k) => sel.includes(k)).map((k) => k + ":" + vals[k]).join("|");
+  if (key === sysStatsShown) return;
+  sysStatsShown = key;
+  els.sysstats.textContent = "";
+  for (const k of SYS_METRIC_ORDER) {
+    if (!sel.includes(k)) continue;
+    const m = SYS_METRICS[k];
+    const v = vals[k];
+    const span = document.createElement("span");
+    span.className = "ss-item";
+    if (v == null) {
+      span.textContent = k === "temp" ? "–°C" : `${m.label} –`;
+      span.title = k === "temp"
+        ? "CPU temperature unavailable on this system — see the System Stats connector"
+        : `${m.label} usage unavailable on this system`;
+    } else {
+      span.textContent = k === "temp" ? `${Math.round(v)}°C` : `${m.label} ${Math.round(v)}%`;
+      span.style.color = sysColor(v, m);
+      span.title = k === "temp" ? "CPU temperature" : `${m.label} usage`;
+    }
+    els.sysstats.appendChild(span);
+  }
+  els.sysstats.classList.remove("hidden");
+}
+async function refreshSysStatsEnabled() {
+  try {
+    const base = (SETTINGS.secretsUrl || "http://localhost:3010").replace(/\/$/, "");
+    const res = await fetch(base + "/api/connectors", { cache: "no-store" });
+    if (!res.ok) { sysStatsEnabled = false; return; }
+    const data = await res.json();
+    sysStatsEnabled = !!(data.connectors || []).find((x) => x.id === "system-stats")?.enabled;
+  } catch { sysStatsEnabled = false; }
+}
+async function pollSysStats() {
+  if (!sysStatsEnabled || sysStatsPref.list.length === 0) { sysStatsLast = null; renderSysStats(); return; }
+  try {
+    const base = (SETTINGS.secretsUrl || "http://localhost:3010").replace(/\/$/, "");
+    const res = await fetch(base + "/api/connectors/system-stats/actions/sysstats_snapshot", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args: {} }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.result) { sysStatsLast = JSON.parse(data.result); renderSysStats(); }
+  } catch { /* harness momentarily unreachable — keep showing the last reading */ }
+}
+// Refresh the enabled flag every ~30s; read the metrics every 3s.
+setInterval(() => {
+  if (sysStatsTickN++ % 10 === 0) refreshSysStatsEnabled().then(pollSysStats);
+  else pollSysStats();
+}, 3000);
+refreshSysStatsEnabled().then(pollSysStats);
 
 // Mirror the orb's music volume onto Spotify (librespot) so both players share one
 // level and "turn it up" moves them together. Fire-and-forget; no-op if Spotify is
@@ -1843,9 +2260,37 @@ async function startSession() {
   setStatus("Connecting");
   setLine("…");
 
+  // Fresh learning session: new sessionId + empty per-session transcript buffer.
+  beginLearnSession();
+
   // Listen & Observe: no tool bridge (so no actions are possible) and only the
   // note tools; always silent. Otherwise the normal brain + connector surface.
   const bridge = observeMode ? null : new ToolBridge(SETTINGS.sources);
+  let recallBlock = "";
+  if (bridge && currentLearningMode() === "auto") {
+    let recallTimer;
+    try {
+      const recalled = await Promise.race([
+        (async () => {
+          await bridge.load();
+          const tool = pickRecallTool(bridge.declarations.map((declaration) => declaration.name));
+          const query = buildRecallQuery({ summary: store.summary, openLoops: savedOpenLoops() });
+          return tool && query ? bridge.call(tool, { query }) : null;
+        })(),
+        new Promise((resolve) => { recallTimer = setTimeout(() => resolve(null), 3000); }),
+      ]);
+      const value = recalled && !recalled.error ? recalled.result : "";
+      const text = typeof value === "string" ? value : value ? JSON.stringify(value) : "";
+      recallBlock = formatRecallBlock(text);
+    } catch {
+      recallBlock = "";
+    } finally {
+      clearTimeout(recallTimer);
+    }
+  }
+  // Fresh debrief state for this session; the bridge is where routed debrief
+  // items are sunk (its declarations are merged once the session loads it).
+  beginDebriefSession(bridge);
   let localTools;
   if (observeMode) {
     // Observe mode: only the READ-ONLY focus tools (never route/confirm/trust).
@@ -1862,7 +2307,7 @@ async function startSession() {
     model: provider === "openai" ? (SETTINGS.openaiModel || "gpt-realtime") : SETTINGS.model,
     voice: provider === "openai" ? (SETTINGS.openaiVoice || "marin") : SETTINGS.voice,
     daemonUrl: SETTINGS.daemonUrl,
-    systemInstruction: SETTINGS.systemInstruction + (focusEnabled() ? FOCUS_GUIDE : "") + conversationContext(),
+    systemInstruction: SETTINGS.systemInstruction + (focusEnabled() ? FOCUS_GUIDE : "") + conversationContext() + (recallBlock ? "\n\n" + recallBlock : ""),
     extraInstruction: observeMode ? OBSERVE_GUIDE : ((ambientMode ? AMBIENT_GUIDE : "") + VIEWPORT_GUIDE),
     muted: observeMode || replyMode === "text",
     toolBridge: bridge,
@@ -1954,11 +2399,46 @@ async function startSession() {
   }
 }
 
+// Forced-debrief wait in progress: further stopSession calls are no-ops (the
+// pending poll below always finishes the teardown within its 8s cap).
+let debriefStopPending = false;
+const DEBRIEF_STOP_WAIT_MS = 8000;
+const DEBRIEF_STOP_POLL_MS = 250;
+const DEBRIEF_MIN_TURNS = 6;
+
 function stopSession(fromCallback = false, opts = {}) {
+  if (debriefStopPending) return; // teardown already queued behind the debrief wait
+  // Forced debrief: before tearing down a live session that actually talked,
+  // give the model one last turn to checkpoint what it learned. Only when the
+  // session is still up (not a server-side close) and learning is on auto.
+  if (
+    !fromCallback && session && currentLearningMode() === "auto" &&
+    debrief.bridge && debrief.turnCount >= DEBRIEF_MIN_TURNS
+  ) {
+    debriefStopPending = true;
+    const requestedAt = Date.now();
+    try { session.sendText(buildDebriefRequestText()); } catch {}
+    const poll = setInterval(() => {
+      const gotDebrief = debrief.receivedAt >= requestedAt;
+      if (gotDebrief || Date.now() - requestedAt >= DEBRIEF_STOP_WAIT_MS || !session) {
+        clearInterval(poll);
+        debriefStopPending = false;
+        teardownSession(fromCallback, opts);
+      }
+    }, DEBRIEF_STOP_POLL_MS);
+    return;
+  }
+  teardownSession(fromCallback, opts);
+}
+
+function teardownSession(fromCallback = false, opts = {}) {
   if (session && !fromCallback) { try { session.stop(); } catch {} }
   session = null;
   starting = false;
   sealTurn();
+  // Session over (every closed path funnels through here): auto-compact if the
+  // model didn't, and ship the final transcript to the harness (fire-and-forget).
+  finishLearnSession();
   micLevel = 0;
   setState("idle");
   setStatus("Idle");

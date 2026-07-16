@@ -17,7 +17,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            rust-targets: ""
+            tauri-args: "--no-bundle"
+          - os: macos-latest
+            # Build a universal binary so a single artifact runs natively on
+            # both Apple Silicon (arm64) and Intel (x86_64) Macs.
+            rust-targets: "aarch64-apple-darwin x86_64-apple-darwin"
+            tauri-args: "--no-bundle --target universal-apple-darwin"
+          - os: ubuntu-latest
+            rust-targets: ""
+            tauri-args: "--no-bundle"
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -32,12 +43,15 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: dtolnay/rust-toolchain@stable
+      - name: Add Rust targets (macOS universal)
+        if: matrix.rust-targets != ''
+        run: rustup target add ${{ matrix.rust-targets }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - run: npm install
-      - run: npm run tauri build -- --no-bundle
+      - run: npm run tauri build -- ${{ matrix.tauri-args }}
 
   harness:
     name: harness (node)

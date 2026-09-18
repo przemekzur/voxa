@@ -108,10 +108,14 @@ function geminiSchema(schema) {
 }
 
 export class GeminiSession {
-  constructor({ apiKey, model, voice, systemInstruction, toolBridge, on, micDeviceId, localTools, extraInstruction, muted, audio } = {}) {
+  constructor({ apiKey, model, voice, thinkingLevel, systemInstruction, toolBridge, on, micDeviceId, localTools, extraInstruction, muted, audio } = {}) {
     this.apiKey = apiKey;
     this.model = model || "gemini-3.1-flash-live-preview";
     this.voice = voice || "Puck";
+    // gemini-3.8-live-extended-thinking rejects setup (close 1007 "Thinking level
+    // must be specified") without a level, so it defaults to "low" to keep voice
+    // latency down. Other models only get thinkingConfig when explicitly set.
+    this.thinkingLevel = thinkingLevel || (/extended-thinking/.test(this.model) ? "low" : "");
     this.micDeviceId = micDeviceId || null;
     // Mic tuning the operator can experiment with from the orb settings.
     // gain/noiseSuppression/autoGainControl drive MicCapture; vadSensitivity sets
@@ -209,6 +213,7 @@ export class GeminiSession {
           : this.audio.vadSensitivity === "low"
           ? { realtimeInputConfig: { automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_LOW" } } }
           : {}),
+        ...(this.thinkingLevel ? { thinkingConfig: { thinkingLevel: this.thinkingLevel } } : {}),
         ...(tools ? { tools } : {}),
       },
       callbacks: {

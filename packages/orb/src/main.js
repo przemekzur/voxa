@@ -190,6 +190,7 @@ const APPEARANCE_TOOLS = [
 const SETTINGS = {
   model: "gemini-3.1-flash-live-preview",
   voice: "Puck",
+  thinkingLevel: "",  // voxa-config voice.thinkingLevel; "" = model default
   secretsUrl: "http://localhost:3010",
   sources: [
     { url: "http://localhost:3010" },  // connector harness: memory brain + connectors (Voxa is brain-free)
@@ -260,6 +261,7 @@ function applyVoxaConfig(cfg) {
   const v = cfg.voice || {};
   if (typeof v.model === "string" && v.model.trim()) SETTINGS.model = v.model.trim();
   if (typeof v.voiceName === "string" && v.voiceName.trim()) SETTINGS.voice = v.voiceName.trim();
+  if (typeof v.thinkingLevel === "string") SETTINGS.thinkingLevel = v.thinkingLevel.trim();
   // The orb speaks only through Gemini Live today; honor model/voice but flag a
   // non-gemini provider rather than silently using the wrong backend.
   if (typeof v.provider === "string" && v.provider) SETTINGS.provider = v.provider;
@@ -1056,6 +1058,7 @@ function buildControls() {
   const statTitles = {
     cpu: "Show CPU usage %", ram: "Show RAM usage %",
     temp: "Show CPU temperature (needs LibreHardwareMonitor)", gpu: "Show GPU usage %",
+    gtemp: "Show GPU temperature (needs LibreHardwareMonitor)",
   };
   for (const id of SYS_METRIC_ORDER) {
     const b = ctlChip(SYS_METRICS[id].label, () => toggleSysMetric(id));
@@ -1591,12 +1594,13 @@ refreshSpotifyEnabled();
 // the strip entirely. Which metrics show is a local preference (settings chips,
 // persisted in localStorage) — deselect all and the strip disappears too.
 const SYS_METRICS = {
-  cpu:  { label: "CPU",  lo: 60, hi: 90 },
-  ram:  { label: "RAM",  lo: 70, hi: 90 },
-  temp: { label: "Temp", lo: 60, hi: 85 },
-  gpu:  { label: "GPU",  lo: 60, hi: 90 },
+  cpu:   { label: "CPU",    lo: 60, hi: 90 },
+  ram:   { label: "RAM",    lo: 70, hi: 90 },
+  temp:  { label: "Temp",   lo: 60, hi: 85 },
+  gpu:   { label: "GPU",    lo: 60, hi: 90 },
+  gtemp: { label: "GPU °C", lo: 60, hi: 90 },
 };
-const SYS_METRIC_ORDER = ["cpu", "ram", "temp", "gpu"];
+const SYS_METRIC_ORDER = ["cpu", "ram", "temp", "gpu", "gtemp"];
 const sysStatsPref = {
   get list() {
     try {
@@ -1630,7 +1634,7 @@ function renderSysStats() {
   const show = sysStatsEnabled && sel.length > 0 && !!s;
   els.body.classList.toggle("stats-on", show);
   if (!show) { els.sysstats.classList.add("hidden"); sysStatsShown = ""; return; }
-  const vals = { cpu: s.cpu, ram: s.ram, temp: s.cpuTemp, gpu: s.gpu };
+  const vals = { cpu: s.cpu, ram: s.ram, temp: s.cpuTemp, gpu: s.gpu, gtemp: s.gpuTemp };
   const key = SYS_METRIC_ORDER.filter((k) => sel.includes(k)).map((k) => k + ":" + vals[k]).join("|");
   if (key === sysStatsShown) return;
   sysStatsShown = key;
@@ -1642,14 +1646,16 @@ function renderSysStats() {
     const span = document.createElement("span");
     span.className = "ss-item";
     if (v == null) {
-      span.textContent = k === "temp" ? "–°C" : `${m.label} –`;
-      span.title = k === "temp"
-        ? "CPU temperature unavailable on this system — see the System Stats connector"
+      span.textContent = k === "temp" ? "–°C" : k === "gtemp" ? "GPU –°C" : `${m.label} –`;
+      span.title = k === "temp" || k === "gtemp"
+        ? `${k === "temp" ? "CPU" : "GPU"} temperature unavailable on this system — see the System Stats connector`
         : `${m.label} usage unavailable on this system`;
     } else {
-      span.textContent = k === "temp" ? `${Math.round(v)}°C` : `${m.label} ${Math.round(v)}%`;
+      span.textContent = k === "temp" ? `${Math.round(v)}°C`
+        : k === "gtemp" ? `GPU ${Math.round(v)}°C`
+        : `${m.label} ${Math.round(v)}%`;
       span.style.color = sysColor(v, m);
-      span.title = k === "temp" ? "CPU temperature" : `${m.label} usage`;
+      span.title = k === "temp" ? "CPU temperature" : k === "gtemp" ? "GPU temperature" : `${m.label} usage`;
     }
     els.sysstats.appendChild(span);
   }
@@ -2307,6 +2313,7 @@ async function startSession() {
     model: provider === "openai" ? (SETTINGS.openaiModel || "gpt-realtime") : SETTINGS.model,
     voice: provider === "openai" ? (SETTINGS.openaiVoice || "marin") : SETTINGS.voice,
     daemonUrl: SETTINGS.daemonUrl,
+    thinkingLevel: SETTINGS.thinkingLevel,
     systemInstruction: SETTINGS.systemInstruction + (focusEnabled() ? FOCUS_GUIDE : "") + conversationContext() + (recallBlock ? "\n\n" + recallBlock : ""),
     extraInstruction: observeMode ? OBSERVE_GUIDE : ((ambientMode ? AMBIENT_GUIDE : "") + VIEWPORT_GUIDE),
     muted: observeMode || replyMode === "text",
